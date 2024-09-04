@@ -2,7 +2,7 @@
 
 // Constructor: Generate or load Diffie-Hellman parameters and keys
 DHWrapper::DHWrapper(int keyLength) : pkey(nullptr), peerKey(nullptr), keyLength(keyLength) {
-    pkey = GenerateDHKeyPair(keyLength);
+    pkey = generateDHKeyPair(keyLength);
 }
 
 // Destructor: Clean up resources
@@ -11,19 +11,19 @@ DHWrapper::~DHWrapper() {
     if (peerKey) EVP_PKEY_free(peerKey);
 }
 
-// Get the public key in PEM format
-string DHWrapper::GetPublicKey() {
-    return KeyToString(pkey, true);
+// Get the public key in PEM format as a vector of unsigned char
+vector<unsigned char> DHWrapper::getPublicKey() {
+    return keyToBytes(pkey, true);
 }
 
-// Load a peer's public key from a PEM string
-void DHWrapper::LoadPeerPublicKey(const string& peerPublicKey) {
+// Load a peer's public key from a PEM vector of unsigned char
+void DHWrapper::loadPeerPublicKey(const vector<unsigned char>& peerPublicKey) {
     if (peerKey) EVP_PKEY_free(peerKey);
-    peerKey = StringToKey(peerPublicKey, true);
+    peerKey = bytesToKey(peerPublicKey, true);
 }
 
 // Compute the shared secret
-string DHWrapper::ComputeSharedSecret() {
+vector<unsigned char> DHWrapper::computeSharedSecret() {
     if (!peerKey) {
         throw runtime_error("Peer public key not loaded");
     }
@@ -56,11 +56,13 @@ string DHWrapper::ComputeSharedSecret() {
     }
 
     EVP_PKEY_CTX_free(ctx);
-    return string(secret.begin(), secret.end());
+    secret.resize(secretLen);
+
+    return secret;
 }
 
-// Helper function: Convert EVP_PKEY to PEM string
-string DHWrapper::KeyToString(EVP_PKEY* key, bool isPublic) {
+// Helper function: Convert EVP_PKEY to PEM bytes
+vector<unsigned char> DHWrapper::keyToBytes(EVP_PKEY* key, bool isPublic) {
     BIO* bio = BIO_new(BIO_s_mem());
     if (isPublic) {
         PEM_write_bio_PUBKEY(bio, key);
@@ -71,15 +73,15 @@ string DHWrapper::KeyToString(EVP_PKEY* key, bool isPublic) {
     BUF_MEM* memPtr;
     BIO_get_mem_ptr(bio, &memPtr);
 
-    string keyStr(memPtr->data, memPtr->length);
+    vector<unsigned char> keyBytes(memPtr->data, memPtr->data + memPtr->length);
     BIO_free(bio);
 
-    return keyStr;
+    return keyBytes;
 }
 
-// Helper function: Convert PEM string to EVP_PKEY
-EVP_PKEY* DHWrapper::StringToKey(const string& keyStr, bool isPublic) {
-    BIO* bio = BIO_new_mem_buf(keyStr.data(), keyStr.size());
+// Helper function: Convert PEM bytes to EVP_PKEY
+EVP_PKEY* DHWrapper::bytesToKey(const vector<unsigned char>& keyBytes, bool isPublic) {
+    BIO* bio = BIO_new_mem_buf(keyBytes.data(), keyBytes.size());
     EVP_PKEY* key = nullptr;
 
     if (isPublic) {
@@ -98,9 +100,9 @@ EVP_PKEY* DHWrapper::StringToKey(const string& keyStr, bool isPublic) {
 }
 
 // Helper function: Generate a DH key pair with the specified key length
-EVP_PKEY* DHWrapper::GenerateDHKeyPair(int keyLength) {
+EVP_PKEY* DHWrapper::generateDHKeyPair(int keyLength) {
     EVP_PKEY* dh_params = EVP_PKEY_new();
-    
+
     if (!dh_params) {
         throw runtime_error("Error creating EVP_PKEY for DH parameters");
     }
@@ -144,4 +146,3 @@ EVP_PKEY* DHWrapper::GenerateDHKeyPair(int keyLength) {
 
     return privkey;
 }
-

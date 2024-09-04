@@ -1,11 +1,5 @@
-#ifndef RANDOMNESS
-#define RANDOMNESS
 
-#include <openssl/rand.h>
-#include <vector>
-#include <stdexcept>
-
-using namespace std;
+#include "Randomness.h"
 
 vector<unsigned char> generateRandomBytes(int length) {
     // Create a vector to hold the random bytes
@@ -18,5 +12,3 @@ vector<unsigned char> generateRandomBytes(int length) {
 
     return randomBytes;
 }
-
-#endif // RANDOMNESS

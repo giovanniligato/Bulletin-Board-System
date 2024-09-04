@@ -11,30 +11,34 @@
 
 using namespace std;
 
+enum class KeyType {
+    Public,
+    Private
+};
+
 class RSAWrapper {
 public:
     RSAWrapper(const string& public_key_path, const string& private_key_path);
     
-    // Encrypt data using the public key
-    vector<unsigned char> encrypt(const string& data) const;
+    // Encrypt data using the specified key type
+    vector<unsigned char> encrypt(const vector<unsigned char>& data, KeyType key_type) const;
 
-    // Decrypt data using the private key
-    string decrypt(const vector<unsigned char>& encrypted_data) const;
+    // Decrypt data using the specified key type
+    vector<unsigned char> decrypt(const vector<unsigned char>& encrypted_data, KeyType key_type) const;
     
     // Encrypt a message using a digital envelope with AES-GCM
-    void sealEnvelope(const string& plaintext, vector<unsigned char>& ciphertext,
+    void sealEnvelope(const vector<unsigned char>& plaintext, vector<unsigned char>& ciphertext,
                       vector<unsigned char>& encrypted_key, vector<unsigned char>& iv,
                       vector<unsigned char>& tag) const;
     
     // Decrypt a message using a digital envelope with AES-GCM
-    string openEnvelope(const vector<unsigned char>& ciphertext, 
-                        const vector<unsigned char>& encrypted_key, 
-                        const vector<unsigned char>& iv,
-                        const vector<unsigned char>& tag) const;
+    vector<unsigned char> openEnvelope(const vector<unsigned char>& ciphertext, 
+                                       const vector<unsigned char>& encrypted_key, 
+                                       const vector<unsigned char>& iv,
+                                       const vector<unsigned char>& tag) const;
     
 private:
-    EVP_PKEY* load_public_key() const;
-    EVP_PKEY* load_private_key() const;
+    EVP_PKEY* load_key(KeyType key_type) const;
 
     string public_key_path_;
     string private_key_path_;

@@ -5,7 +5,6 @@
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
-#include <string>
 #include <vector>
 #include <stdexcept>
 
@@ -16,19 +15,18 @@ public:
     DHWrapper(int keyLength);
     ~DHWrapper();
 
-    string GetPublicKey();
-    void LoadPeerPublicKey(const string& peerPublicKey);
-    string ComputeSharedSecret();
+    vector<unsigned char> getPublicKey();
+    void loadPeerPublicKey(const vector<unsigned char>& peerPublicKey);
+    vector<unsigned char> computeSharedSecret();
 
 private:
     EVP_PKEY* pkey;
     EVP_PKEY* peerKey;
     int keyLength;
 
-    string KeyToString(EVP_PKEY* key, bool isPublic);
-    EVP_PKEY* StringToKey(const string& keyStr, bool isPublic);
-    EVP_PKEY* GenerateDHKeyPair(int keyLength);
+    vector<unsigned char> keyToBytes(EVP_PKEY* key, bool isPublic);
+    EVP_PKEY* bytesToKey(const vector<unsigned char>& keyBytes, bool isPublic);
+    EVP_PKEY* generateDHKeyPair(int keyLength);
 };
 
-
-#endif
+#endif // DH_WRAPPER_H

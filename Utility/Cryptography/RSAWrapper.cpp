@@ -5,11 +5,10 @@
 RSAWrapper::RSAWrapper(const string& public_key_path, const string& private_key_path)
     : public_key_path_(public_key_path), private_key_path_(private_key_path) {}
 
-vector<unsigned char> RSAWrapper::encrypt(const string& data) const {
-    unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> evp_pub_key(load_public_key(), EVP_PKEY_free);
-    vector<unsigned char> encrypted(EVP_PKEY_size(evp_pub_key.get()));
-
-    EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new(evp_pub_key.get(), nullptr);
+vector<unsigned char> RSAWrapper::encrypt(const vector<unsigned char>& data, KeyType key_type) const {
+    unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> evp_key(load_key(key_type), EVP_PKEY_free);
+    
+    EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new(evp_key.get(), nullptr);
     if (!pctx) {
         throw runtime_error("Failed to create EVP_PKEY_CTX.");
     }
@@ -19,23 +18,34 @@ vector<unsigned char> RSAWrapper::encrypt(const string& data) const {
         throw runtime_error("EVP_PKEY_encrypt_init failed.");
     }
 
+    // Determine the required buffer length
     size_t outlen;
-    if (EVP_PKEY_encrypt(pctx, encrypted.data(), &outlen, 
-                         reinterpret_cast<const unsigned char*>(data.c_str()), data.size()) <= 0) {
+    if (EVP_PKEY_encrypt(pctx, nullptr, &outlen, data.data(), data.size()) <= 0) {
+        EVP_PKEY_CTX_free(pctx);
+        throw runtime_error("Failed to determine encrypted buffer length: " + string(ERR_error_string(ERR_get_error(), nullptr)));
+    }
+
+    // Allocate buffer with the required size
+    vector<unsigned char> encrypted(outlen);
+
+    // Perform the encryption
+    if (EVP_PKEY_encrypt(pctx, encrypted.data(), &outlen, data.data(), data.size()) <= 0) {
         EVP_PKEY_CTX_free(pctx);
         throw runtime_error("Encryption failed: " + string(ERR_error_string(ERR_get_error(), nullptr)));
     }
 
+    // Resize the encrypted buffer to the actual length
     encrypted.resize(outlen);
+
     EVP_PKEY_CTX_free(pctx);
     return encrypted;
 }
 
-string RSAWrapper::decrypt(const vector<unsigned char>& encrypted_data) const {
-    unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> evp_priv_key(load_private_key(), EVP_PKEY_free);
-    vector<unsigned char> decrypted(EVP_PKEY_size(evp_priv_key.get()));
 
-    EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new(evp_priv_key.get(), nullptr);
+vector<unsigned char> RSAWrapper::decrypt(const vector<unsigned char>& encrypted_data, KeyType key_type) const {
+    unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> evp_key(load_key(key_type), EVP_PKEY_free);
+
+    EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new(evp_key.get(), nullptr);
     if (!pctx) {
         throw runtime_error("Failed to create EVP_PKEY_CTX.");
     }
@@ -45,18 +55,31 @@ string RSAWrapper::decrypt(const vector<unsigned char>& encrypted_data) const {
         throw runtime_error("EVP_PKEY_decrypt_init failed.");
     }
 
+    // Determine the required buffer length
     size_t outlen;
+    if (EVP_PKEY_decrypt(pctx, nullptr, &outlen, encrypted_data.data(), encrypted_data.size()) <= 0) {
+        EVP_PKEY_CTX_free(pctx);
+        throw runtime_error("Failed to determine decrypted buffer length: " + string(ERR_error_string(ERR_get_error(), nullptr)));
+    }
+
+    // Allocate buffer with the required size
+    vector<unsigned char> decrypted(outlen);
+
+    // Perform the decryption
     if (EVP_PKEY_decrypt(pctx, decrypted.data(), &outlen, encrypted_data.data(), encrypted_data.size()) <= 0) {
         EVP_PKEY_CTX_free(pctx);
         throw runtime_error("Decryption failed: " + string(ERR_error_string(ERR_get_error(), nullptr)));
     }
 
+    // Resize the decrypted buffer to the actual length
     decrypted.resize(outlen);
+
     EVP_PKEY_CTX_free(pctx);
-    return string(reinterpret_cast<char*>(decrypted.data()), decrypted.size());
+    return decrypted;
 }
 
-void RSAWrapper::sealEnvelope(const string& plaintext, vector<unsigned char>& ciphertext,
+
+void RSAWrapper::sealEnvelope(const vector<unsigned char>& plaintext, vector<unsigned char>& ciphertext,
                               vector<unsigned char>& encrypted_key, vector<unsigned char>& iv,
                               vector<unsigned char>& tag) const {
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
@@ -64,7 +87,7 @@ void RSAWrapper::sealEnvelope(const string& plaintext, vector<unsigned char>& ci
         throw runtime_error("Failed to create EVP_CIPHER_CTX.");
     }
 
-    unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> evp_pub_key(load_public_key(), EVP_PKEY_free);
+    unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> evp_pub_key(load_key(KeyType::Public), EVP_PKEY_free);
 
     // Resize buffers
     encrypted_key.resize(EVP_PKEY_size(evp_pub_key.get()));
@@ -90,7 +113,7 @@ void RSAWrapper::sealEnvelope(const string& plaintext, vector<unsigned char>& ci
     // Encrypt the plaintext
     ciphertext.resize(plaintext.size() + EVP_CIPHER_block_size(EVP_aes_128_gcm()));
     int len = 0, ciphertext_len = 0;
-    const unsigned char* input_data = reinterpret_cast<const unsigned char*>(plaintext.data());
+    const unsigned char* input_data = plaintext.data();
     size_t remaining = plaintext.size();
 
     while (remaining > 0) {
@@ -112,7 +135,6 @@ void RSAWrapper::sealEnvelope(const string& plaintext, vector<unsigned char>& ci
     ciphertext_len += len;
     ciphertext.resize(ciphertext_len);
 
-
     // Get the authentication tag
     if (1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, tag.size(), tag.data())) {
         EVP_CIPHER_CTX_free(ctx);
@@ -122,16 +144,16 @@ void RSAWrapper::sealEnvelope(const string& plaintext, vector<unsigned char>& ci
     EVP_CIPHER_CTX_free(ctx);
 }
 
-string RSAWrapper::openEnvelope(const vector<unsigned char>& ciphertext, 
-                                 const vector<unsigned char>& encrypted_key, 
-                                 const vector<unsigned char>& iv,
-                                 const vector<unsigned char>& tag) const {
+vector<unsigned char> RSAWrapper::openEnvelope(const vector<unsigned char>& ciphertext, 
+                                               const vector<unsigned char>& encrypted_key, 
+                                               const vector<unsigned char>& iv,
+                                               const vector<unsigned char>& tag) const {
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
         throw runtime_error("Failed to create EVP_CIPHER_CTX.");
     }
 
-    unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> evp_priv_key(load_private_key(), EVP_PKEY_free);
+    unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> evp_priv_key(load_key(KeyType::Private), EVP_PKEY_free);
 
     // Initialize decryption context with AES-GCM
     if (1 != EVP_OpenInit(ctx, EVP_aes_128_gcm(), encrypted_key.data(), encrypted_key.size(),
@@ -171,37 +193,33 @@ string RSAWrapper::openEnvelope(const vector<unsigned char>& ciphertext,
     plaintext_len += len;
     plaintext.resize(plaintext_len);
 
-
     EVP_CIPHER_CTX_free(ctx);
 
-    return string(reinterpret_cast<char*>(plaintext.data()), plaintext.size());
+    return plaintext;
 }
 
+EVP_PKEY* RSAWrapper::load_key(KeyType key_type) const {
+    FILE* key_file = nullptr;
+    EVP_PKEY* evp_key = nullptr;
 
-EVP_PKEY* RSAWrapper::load_public_key() const {
-    FILE* pub_key_file = fopen(public_key_path_.c_str(), "r");
-    if (!pub_key_file) {
-        throw runtime_error("Could not open public key file.");
+    if (key_type == KeyType::Public) {
+        key_file = fopen(public_key_path_.c_str(), "r");
+        if (!key_file) {
+            throw runtime_error("Could not open public key file.");
+        }
+        evp_key = PEM_read_PUBKEY(key_file, nullptr, nullptr, nullptr);
+    } else {
+        key_file = fopen(private_key_path_.c_str(), "r");
+        if (!key_file) {
+            throw runtime_error("Could not open private key file.");
+        }
+        evp_key = PEM_read_PrivateKey(key_file, nullptr, nullptr, (void*)"serverBBS");
     }
-    EVP_PKEY* evp_pub_key = PEM_read_PUBKEY(pub_key_file, nullptr, nullptr, nullptr);
-    fclose(pub_key_file);
 
-    if (!evp_pub_key) {
-        throw runtime_error("Could not read public key.");
-    }
-    return evp_pub_key;
-}
+    fclose(key_file);
 
-EVP_PKEY* RSAWrapper::load_private_key() const {
-    FILE* priv_key_file = fopen(private_key_path_.c_str(), "r");
-    if (!priv_key_file) {
-        throw runtime_error("Could not open private key file.");
+    if (!evp_key) {
+        throw runtime_error("Could not read key.");
     }
-    EVP_PKEY* evp_priv_key = PEM_read_PrivateKey(priv_key_file, nullptr, nullptr, (void*)"serverBBS");
-    fclose(priv_key_file);
-
-    if (!evp_priv_key) {
-        throw runtime_error("Could not read private key.");
-    }
-    return evp_priv_key;
+    return evp_key;
 }
