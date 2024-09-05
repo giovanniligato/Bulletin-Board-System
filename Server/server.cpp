@@ -14,6 +14,9 @@
 #include "../Utility/Cryptography/AESGCMWrapper.h"
 #include "../Utility/Cryptography/DHWrapper.h"
 #include "../Utility/Cryptography/Hash.h"
+#include "../Packets/GeneralPacket.h"
+#include "../FileSystem/User.h"
+
 
 using namespace std;
 
@@ -37,6 +40,7 @@ private:
     static void signalHandler(int signal);
     static void performKeyExchange(int client_socket, vector<unsigned char>& sessionKey);
     static void processClientRequests(int client_socket, const vector<unsigned char>& sessionKey);
+    static void registerUser(int client_socket, const vector<unsigned char>& sessionKey, GeneralPacket receivedPacket);
 
     // Helper functions for encryption and decryption
     static string decryptMessage(const vector<unsigned char>& ciphertext, const vector<unsigned char>& sessionKey);
@@ -218,8 +222,8 @@ void Server::performKeyExchange(int client_socket, vector<unsigned char>& sessio
         sessionKey = Hash::computeSHA256(DH_shared_secret);
         // Session key is 32 bytes long
 
-        cout << "Session key Hex: "<< Hash::toHexString(sessionKey) << endl;   
-
+        // As we are using AES128-GCM for symmetric encryption, we need a 128-bit key (16 bytes)
+        sessionKey.resize(16);
 
     }
     catch (const exception& ex) {
@@ -234,6 +238,35 @@ void Server::performKeyExchange(int client_socket, vector<unsigned char>& sessio
 }
 
 void Server::processClientRequests(int client_socket, const vector<unsigned char>& sessionKey) {
+    
+    try{
+
+        while(client_socket > 0){
+            GeneralPacket receivedPacket = GeneralPacket::receive(client_socket, sessionKey);
+
+            switch(receivedPacket.getType()){
+                case T_REGISTRATION:
+                    registerUser(client_socket, sessionKey, receivedPacket);
+                    break;
+                case T_LOGIN:
+                    break;
+                default:
+                    cout << "Invalid packet type received." << endl;
+                    cout << "Closing connection..." << endl;
+                    close(client_socket);
+                    client_socket = -1;
+                    break;
+            }
+
+        }
+
+    }
+    catch(const exception& ex){
+        cerr << "Error in processClientRequests(): " << ex.what() << endl;
+    }
+
+    
+    
     char buffer[BUFFER_SIZE];
     int bytes_read;
 
@@ -253,6 +286,93 @@ void Server::processClientRequests(int client_socket, const vector<unsigned char
         send(client_socket, encryptedResponse.data(), encryptedResponse.size(), 0);
     }
 }
+
+void Server::registerUser(int client_socket, const vector<unsigned char>& sessionKey, GeneralPacket receivedPacket) {
+    
+    try{
+
+        vector<unsigned char> nonce = receivedPacket.getNonce();
+        vector<unsigned char> payload = receivedPacket.getPayload();
+
+        // Extract the email, nickname, and password from the payload
+        // 1 Byte for the email length, email, 1 Byte for the nickname length, nickname, 1 Byte for the password length, password
+        uint8_t email_length = payload[0];
+        string email(payload.begin() + 1, payload.begin() + 1 + email_length);
+
+        uint8_t nickname_length = payload[1 + email_length];
+        string nickname(payload.begin() + 1 + email_length + 1, payload.begin() + 1 + email_length + 1 + nickname_length);
+
+        uint8_t password_length = payload[1 + email_length + 1 + nickname_length];
+        string password(payload.begin() + 1 + email_length + 1 + nickname_length + 1, payload.begin() + 1 + email_length + 1 + nickname_length + 1 + password_length);
+
+        cout << "Received registration request:" << endl;
+        cout << "Email: " << email << endl;
+        cout << "nickname: " << nickname << endl;
+        cout << "Password: " << password << endl;
+
+        
+        User newUser(email, nickname, password);
+        // At this point, the server has to check if the nickname is already in use
+        // If the nickname is not in use, the server can register the user
+
+        payload.clear();
+
+        if(!newUser.checkExistence()){
+            // The user does not exist, so we can register the user
+            // but before that, the server has to send a challenge
+            // to the email address specified by the user
+            vector<unsigned char> challenge = newUser.sendChallenge();
+
+            // Sending the response to the client
+            GeneralPacket responsePacket(nonce, T_OK, payload);
+            // Send securely to the server
+            responsePacket.send(client_socket, sessionKey);
+
+            // Now waiting for the client to send the response to the challenge
+            GeneralPacket challengePacket = GeneralPacket::receive(client_socket, sessionKey);
+
+            if(challengePacket.getPayload() != challenge){
+                cout << "Challenge response incorrect." << endl;
+                
+                responsePacket.setType(T_KO);
+                responsePacket.send(client_socket, sessionKey);
+
+                // Delete the challenge
+                newUser.deleteChallenge();
+                return;
+            }
+
+            // User has successfully responded to the challenge
+            // Now we can register the user
+            newUser.saveUser();
+
+            cout << "User registered successfully." << endl;
+           
+            // Send securely to the server
+            responsePacket.send(client_socket, sessionKey);
+
+            // Delete the challenge
+            newUser.deleteChallenge();
+        }
+        else{
+            cout << "User already exists." << endl;
+
+            GeneralPacket responsePacket(nonce, T_KO, payload);
+            // Send securely to the server
+            responsePacket.send(client_socket, sessionKey);
+            return;
+        }
+
+    }
+    catch(const exception& ex){
+        cerr << "Error in registerUser(): " << ex.what() << endl;
+    }
+    
+    // TO DO: Implement user registration logic
+    // For now, just echo the received packet back to the client
+    // receivedPacket.send(client_socket);
+}
+
 
 string Server::decryptMessage(const vector<unsigned char>& ciphertext, const vector<unsigned char>& sessionKey) {
     // TO DO: Implement decryption using sessionKey

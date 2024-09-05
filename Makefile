@@ -2,7 +2,7 @@
 CXX = g++
 
 # Compiler flags
-CXXFLAGS = -Wall -Wextra -std=c++11
+CXXFLAGS = -Wall -Wextra -std=c++17
 
 # Linker flags
 LDFLAGS = -lssl -lcrypto -lpthread
@@ -11,10 +11,12 @@ LDFLAGS = -lssl -lcrypto -lpthread
 SERVER_DIR = Server
 CLIENT_DIR = Client
 UTILITY_CRYPTOGRAPHY_DIR = Utility/Cryptography
+PACKETS_DIR = Packets
+FILESYSTEM_DIR = FileSystem
 
 # Source files
-SERVER_SRC = $(SERVER_DIR)/server.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/RSAWrapper.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/DHWrapper.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/AESGCMWrapper.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/Randomness.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/Hash.cpp
-CLIENT_SRC = $(CLIENT_DIR)/client.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/RSAWrapper.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/DHWrapper.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/AESGCMWrapper.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/Randomness.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/Hash.cpp
+SERVER_SRC = $(SERVER_DIR)/server.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/RSAWrapper.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/DHWrapper.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/AESGCMWrapper.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/Randomness.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/Hash.cpp $(PACKETS_DIR)/GeneralPacket.cpp $(FILESYSTEM_DIR)/User.cpp
+CLIENT_SRC = $(CLIENT_DIR)/client.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/RSAWrapper.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/DHWrapper.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/AESGCMWrapper.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/Randomness.cpp $(UTILITY_CRYPTOGRAPHY_DIR)/Hash.cpp $(PACKETS_DIR)/GeneralPacket.cpp
 
 # Output executables
 SERVER_EXE = serverBBS

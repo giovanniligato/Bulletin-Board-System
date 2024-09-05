@@ -3,12 +3,14 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <string>
+#include <termios.h>
 
 #include "../Utility/Cryptography/Randomness.h"
 #include "../Utility/Cryptography/RSAWrapper.h"
 #include "../Utility/Cryptography/AESGCMWrapper.h"
 #include "../Utility/Cryptography/DHWrapper.h"
 #include "../Utility/Cryptography/Hash.h"
+#include "../Packets/GeneralPacket.h"
 
 using namespace std;
 
@@ -28,12 +30,17 @@ private:
     int port;
     int sock;
     struct sockaddr_in serv_addr;
+
+    vector<unsigned char> sessionKey;
+
     char buffer[BUFFER_SIZE] = {0};
     bool isLoggedIn = false;
 
     void connectToServer();
     void closeConnection();
     void registrationPhase();
+    void registerUser();
+    string getPassword();
     void login();
     void logout();
     void postLoginMenu();
@@ -151,16 +158,16 @@ void Client::connectToServer() {
         vector<unsigned char> DH_shared_secret = dhWrapper.computeSharedSecret();
 
         // Before using the shared secret as the session key, it is a good practice to hash it
-        vector<unsigned char> sessionKey = Hash::computeSHA256(DH_shared_secret);
+        sessionKey = Hash::computeSHA256(DH_shared_secret);
 
-        cout << "Session key Hex: "<< Hash::toHexString(sessionKey) << endl;   
+        // As we are using AES128-GCM for symmetric encryption, we need a 128-bit key (16 bytes)
+        sessionKey.resize(16);
 
     }
     catch (const exception& ex) {
         cerr << "Error in connectToServer(): " << ex.what() << endl;
         exit(-1);
     }
-
 
 }
 
@@ -183,8 +190,7 @@ void Client::registrationPhase() {
 
         switch (choice) {
             case 1:
-                // Implement registration logic here
-                cout << "Registration is currently not implemented." << endl;
+                registerUser();
                 break;
             case 2:
                 login();
@@ -199,15 +205,154 @@ void Client::registrationPhase() {
     }
 }
 
+string Client::getPassword() {
+    termios oldt, newt;
+    string password;
+
+    // Get current terminal attributes
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    
+    // Disable echo
+    newt.c_lflag &= ~(ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+
+    cout << "Enter password: ";
+    getline(cin, password);
+
+    // Restore old terminal attributes
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+
+    cout << endl;  // Move to the next line
+
+    return password;
+}
+
+void Client::registerUser() {
+
+    try {
+
+        string email, nickname, password;
+        cout << "Enter email: ";
+        getline(cin, email);
+        cout << "Enter nickname: ";
+        getline(cin, nickname);
+        password = getPassword();
+
+        // Send registration credentials to the server
+        vector<unsigned char> nonce = generateRandomBytes(16);
+        vector<unsigned char> payload;
+
+        // Insert the email, nickname, and password into the payload
+        // 1 Byte for the email length, email, 1 Byte for the nickname length, nickname, 1 Byte for the password length, password
+        payload.push_back(email.length());
+        payload.insert(payload.end(), email.begin(), email.end());
+        payload.push_back(nickname.length());
+        payload.insert(payload.end(), nickname.begin(), nickname.end());
+        payload.push_back(password.length());
+        payload.insert(payload.end(), password.begin(), password.end());
+
+        // Construct the packet
+        GeneralPacket registrationPacket(nonce, T_REGISTRATION, payload);
+        // Send securely to the server
+        registrationPacket.send(sock, sessionKey);
+
+        cout<<"Siamo qui."<<endl;
+
+        // Receive the response from the server
+        GeneralPacket responsePacket = GeneralPacket::receive(sock, sessionKey);
+        if(responsePacket.getNonce() != nonce) {
+            cout << "Nonce mismatch." << endl;
+            exit(-1);
+        }
+
+        cout<<"Siamo dopo."<<endl;
+
+        if(responsePacket.getType() == T_OK) {
+            cout << "Challenge sent to your email." << endl;
+            cout << "Please check your email and enter the challenge code: ";
+            uint32_t challenge;
+            cin >> challenge;
+            cin.ignore();
+
+            // Send the challenge to the server
+            payload.clear();
+
+            // Insert the challenge into the payload
+            vector<unsigned char> challenge_bytes = {static_cast<unsigned char>((challenge >> 24) & 0xFF), 
+                                                     static_cast<unsigned char>((challenge >> 16) & 0xFF),
+                                                     static_cast<unsigned char>((challenge >> 8) & 0xFF),
+                                                     static_cast<unsigned char>(challenge & 0xFF)};
+            payload.insert(payload.end(), challenge_bytes.begin(), challenge_bytes.end());
+            
+            registrationPacket.setPayload(payload);
+
+            // Send securely to the server
+            registrationPacket.send(sock, sessionKey);
+
+            // Receive the response from the server
+            responsePacket = GeneralPacket::receive(sock, sessionKey);
+
+            if(responsePacket.getNonce() != nonce) {
+                cout << "Nonce mismatch." << endl;
+                exit(-1);
+            }
+
+            if(responsePacket.getType() == T_OK) {
+                cout << "Registration successful." << endl;
+                return;
+            }
+            else if(responsePacket.getType() == T_KO) {
+                cout << "Challenge code is incorrect. User registration failed." << endl;
+                return;
+            }
+            else {
+                cout << "Not expected response type." << endl;
+                exit(-1);
+            }
+            
+        } 
+        else if(responsePacket.getType() == T_KO) {
+            cout << "Nickname already exists." << endl;
+            return;
+        }
+        else {
+            cout << "Not expected response type." << endl;
+            exit(-1);
+        }
+
+
+
+
+        string registerMessage = "REGISTER " + nickname + " " + password;
+        send(sock, registerMessage.c_str(), registerMessage.length(), 0);
+
+        // Receive the response from the server
+        int bytes_read = read(sock, buffer, BUFFER_SIZE);
+        if (bytes_read > 0) {
+            buffer[bytes_read] = '\0';
+            string response(buffer);
+            cout << "Registration response: " << response << endl;
+        }
+
+    }
+    catch (const exception& ex) {
+        cerr << "Error in register(): " << ex.what() << endl;
+        exit(-1);
+    }
+
+    
+}
+
 void Client::login() {
-    string username, password;
-    cout << "Enter username: ";
-    getline(cin, username);
+    string nickname, password;
+    cout << "Enter nickname: ";
+    getline(cin, nickname);
     cout << "Enter password: ";
     getline(cin, password);
 
     // Send login credentials to the server
-    string loginMessage = "LOGIN " + username + " " + password;
+    string loginMessage = "LOGIN " + nickname + " " + password;
     send(sock, loginMessage.c_str(), loginMessage.length(), 0);
 
     // Receive the response from the server
