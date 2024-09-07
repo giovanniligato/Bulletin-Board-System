@@ -16,6 +16,7 @@
 #include "../Utility/Cryptography/Hash.h"
 #include "../Packets/GeneralPacket.h"
 #include "../FileSystem/User.h"
+#include "../FileSystem/BulletinBoard.h"
 
 
 using namespace std;
@@ -34,13 +35,23 @@ private:
     int server_socket;
     struct sockaddr_in address;
     vector<thread> client_threads;
+
     static volatile bool server_running; 
+
+    static BulletinBoard bulletinBoard;
 
     static void clientHandler(int client_socket);
     static void signalHandler(int signal);
     static void performKeyExchange(int client_socket, vector<unsigned char>& sessionKey);
     static void processClientRequests(int client_socket, const vector<unsigned char>& sessionKey);
+    
     static void registerUser(int client_socket, const vector<unsigned char>& sessionKey, GeneralPacket receivedPacket);
+    static void loginUser(int client_socket, const vector<unsigned char>& sessionKey, vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket);
+
+    static void listMessages(int client_socket, const vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket);
+    static void getMessage(int client_socket, const vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket);
+    static void addMessage(int& client_socket, const vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket);
+
 
     // Helper functions for encryption and decryption
     static string decryptMessage(const vector<unsigned char>& ciphertext, const vector<unsigned char>& sessionKey);
@@ -48,6 +59,7 @@ private:
 };
 
 volatile bool Server::server_running = true;
+BulletinBoard Server::bulletinBoard("Server/Storage/BulletinBoard");
 
 Server::Server(int port) {
     int opt = 1;
@@ -148,107 +160,96 @@ void Server::performKeyExchange(int client_socket, vector<unsigned char>& sessio
 
     try {
 
-        // Receiving the encrypted authentication key
-        vector<unsigned char> encrypted_authentication_key(256);
-        if (recv(client_socket, encrypted_authentication_key.data(), encrypted_authentication_key.size(), 0) < 0) {
-            throw runtime_error("Failed to receive the encrypted authentication key.");
-        }
-
-        // Receiving the IV
-        vector<unsigned char> iv(12);
-        if (recv(client_socket, iv.data(), iv.size(), 0) < 0) {
-            throw runtime_error("Failed to receive the IV.");
-        }
-
-        // Receiving the AAD
-        vector<unsigned char> aad(670);
-        if (recv(client_socket, aad.data(), aad.size(), 0) < 0) {
-            throw runtime_error("Failed to receive the AAD.");
-        }
-
-        // Receiving the tag
-        vector<unsigned char> tag(16);
-        if (recv(client_socket, tag.data(), tag.size(), 0) < 0) {
-            throw runtime_error("Failed to receive the tag.");
-        }
-
-        // Decrypt the authentication key using the server's private key
-        RSAWrapper rsaWrapper("", "Server/Storage/Keys/server_privkey.pem");
-        vector<unsigned char> authentication_key = rsaWrapper.decrypt(encrypted_authentication_key, KeyType::Private);
-
-        // Check the tag for the AAD
-        vector<unsigned char> ciphertext;
-        vector<unsigned char> plaintext = AESGCMWrapper::decrypt(authentication_key, ciphertext, iv, tag, aad);
-
-        // Extract the client's public key and nonce from the AAD (last 16 bytes are the nonce)
-        vector<unsigned char> clientDH_public_key(aad.begin(), aad.end() - 16);
-        vector<unsigned char> nonce(aad.end() - 16, aad.end());
-
-        // Generate the server's public key for the Diffie-Hellman key exchange
+        // Diffie-Hellman key exchange
         DHWrapper dhWrapper(1024);
-        vector<unsigned char> serverDH_public_key = dhWrapper.getPublicKey();
-
-
-        // Sending back to the client the server's public key and the nonce
-
-        // Insert into the aad the public key and the nonce
-        aad.clear();
-        aad.insert(aad.end(), serverDH_public_key.begin(), serverDH_public_key.end());
-        aad.insert(aad.end(), nonce.begin(), nonce.end());
-
-        // Compute the authentication tag for the message serverDH_public_key || nonce
-        AESGCMWrapper::encrypt(authentication_key, plaintext, ciphertext, iv, tag, aad);
-
-        // Sending all to the client
-
-        // 12 Bytes
-        send(client_socket, iv.data(), iv.size(), 0);
-
-        // 670 Bytes
-        send(client_socket, aad.data(), aad.size(), 0);
-
-        // 16 Bytes
-        send(client_socket, tag.data(), tag.size(), 0);
-
-
-        // Load the client's public key
-        dhWrapper.loadPeerPublicKey(clientDH_public_key);
-
-        // Compute the shared secret
-        vector<unsigned char> DH_shared_secret = dhWrapper.computeSharedSecret();
-        // DH shared secret is 128 bytes long
-
-        // Before using the shared secret as the session key, it is a good practice to hash it
-        sessionKey = Hash::computeSHA256(DH_shared_secret);
-        // Session key is 32 bytes long
-
+        
+        vector<unsigned char> authKey;
         // As we are using AES128-GCM for symmetric encryption, we need a 128-bit key (16 bytes)
-        sessionKey.resize(16);
+        sessionKey = dhWrapper.serverKeyExchange(client_socket, authKey, true, 16);
 
     }
     catch (const exception& ex) {
         cerr << "Error in connectToServer(): " << ex.what() << endl;
     }
 
-
-
-    // TO DO: Implement key exchange protocol (e.g., Diffie-Hellman or ECDH)
-    // The sessionKey should be derived from the key exchange process
-
 }
 
 void Server::processClientRequests(int client_socket, const vector<unsigned char>& sessionKey) {
-    
+
+    vector<unsigned char> postLoginSessionKey;
+
     try{
 
         while(client_socket > 0){
-            GeneralPacket receivedPacket = GeneralPacket::receive(client_socket, sessionKey);
+            GeneralPacket receivedPacket = postLoginSessionKey.empty()
+                                         ? GeneralPacket::receive(client_socket, sessionKey)
+                                         : GeneralPacket::receive(client_socket, postLoginSessionKey);
+
 
             switch(receivedPacket.getType()){
                 case T_REGISTRATION:
+                    if(!postLoginSessionKey.empty()){
+                        cout << "Cannot register when user is logged in." << endl;
+                        cout << "Closing connection..." << endl;
+                        close(client_socket);
+                        client_socket = -1;
+                        break;
+                    }
                     registerUser(client_socket, sessionKey, receivedPacket);
                     break;
                 case T_LOGIN:
+                    if(!postLoginSessionKey.empty()){
+                        cout << "User already logged in." << endl;
+                        cout << "Closing connection..." << endl;
+                        close(client_socket);
+                        client_socket = -1;
+                        break;
+                    }
+                    loginUser(client_socket, sessionKey, postLoginSessionKey, receivedPacket);
+                    break;
+                case T_LIST:
+                    if(postLoginSessionKey.empty()){
+                        cout << "Cannot list when user is not logged in." << endl;
+                        cout << "Closing connection..." << endl;
+                        close(client_socket);
+                        client_socket = -1;
+                        break;
+                    }
+                    cout << "Received LIST request." << endl;
+                    listMessages(client_socket, postLoginSessionKey, receivedPacket);
+                    break;
+                case T_GET:
+                    if(postLoginSessionKey.empty()){
+                        cout << "Cannot get when user is not logged in." << endl;
+                        cout << "Closing connection..." << endl;
+                        close(client_socket);
+                        client_socket = -1;
+                        break;
+                    }
+                    cout << "Received GET request." << endl;
+                    getMessage(client_socket, postLoginSessionKey, receivedPacket);
+                    break;
+                case T_ADD:
+                    if(postLoginSessionKey.empty()){
+                        cout << "Cannot add when user is not logged in." << endl;
+                        cout << "Closing connection..." << endl;
+                        close(client_socket);
+                        client_socket = -1;
+                        break;
+                    }
+                    cout << "Received ADD request." << endl;
+                    addMessage(client_socket, postLoginSessionKey, receivedPacket);
+                    break;
+                case T_LOGOUT:
+                    if(postLoginSessionKey.empty()){
+                        cout << "Cannot logout when user is not logged in." << endl;
+                        cout << "Closing connection..." << endl;
+                        close(client_socket);
+                        client_socket = -1;
+                        break;
+                    }
+                    cout << "Received LOGOUT request." << endl;
+                    postLoginSessionKey.clear();
                     break;
                 default:
                     cout << "Invalid packet type received." << endl;
@@ -291,7 +292,7 @@ void Server::registerUser(int client_socket, const vector<unsigned char>& sessio
     
     try{
 
-        vector<unsigned char> nonce = receivedPacket.getNonce();
+        vector<unsigned char> nonce = receivedPacket.getAAD();
         vector<unsigned char> payload = receivedPacket.getPayload();
 
         // Extract the email, nickname, and password from the payload
@@ -372,6 +373,169 @@ void Server::registerUser(int client_socket, const vector<unsigned char>& sessio
     // For now, just echo the received packet back to the client
     // receivedPacket.send(client_socket);
 }
+
+void Server::loginUser(int client_socket, const vector<unsigned char>& sessionKey, vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket) {
+    
+    try{
+
+        vector<unsigned char> nonce = receivedPacket.getAAD();
+        vector<unsigned char> payload = receivedPacket.getPayload();
+
+        // Extract the nickname and password from the payload
+        // 1 Byte for the nickname length, nickname, 1 Byte for the password length, password
+        uint8_t nickname_length = payload[0];
+        string nickname(payload.begin() + 1, payload.begin() + 1 + nickname_length);
+
+        uint8_t password_length = payload[1 + nickname_length];
+        string password(payload.begin() + 1 + nickname_length + 1, payload.begin() + 1 + nickname_length + 1 + password_length);
+
+        cout << "Received login request:" << endl;
+        cout << "nickname: " << nickname << endl;
+        cout << "Password: " << password << endl;
+
+        User user(nickname, password);
+
+        payload.clear();
+
+        if(user.checkExistence() && user.checkPassword()){
+            cout << "User logged in successfully." << endl;
+
+            GeneralPacket responsePacket(nonce, T_OK, payload);
+            // Send securely to the server
+            responsePacket.send(client_socket, sessionKey);
+
+            // Begin a new instance of the DH key exchange
+            DHWrapper dhWrapper(1024);
+            postLoginSessionKey = dhWrapper.serverKeyExchange(client_socket, sessionKey, false, 16);
+
+        }
+        else{
+            cout << "User login failed." << endl;
+
+            GeneralPacket responsePacket(nonce, T_KO, payload);
+            // Send securely to the server
+            responsePacket.send(client_socket, sessionKey);
+        }
+
+    }
+    catch(const exception& ex){
+        cerr << "Error in loginUser(): " << ex.what() << endl;
+    }
+
+    // TO DO: Implement user login logic
+    // For now, just echo the received packet back to the client
+    // receivedPacket.send(client_socket);
+}
+
+void Server::listMessages(int client_socket, const vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket) {
+    
+    try{
+
+        vector<unsigned char> nonce = receivedPacket.getAAD();
+        vector<unsigned char> payload = receivedPacket.getPayload();
+
+
+    }
+    catch(const exception& ex){
+        cerr << "Error in listMessages(): " << ex.what() << endl;
+    }
+
+    // TO DO: Implement list messages logic
+    // For now, just echo the received packet back to the client
+    // receivedPacket.send(client_socket);
+}
+
+void Server::getMessage(int client_socket, const vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket) {
+    
+    try{
+
+        vector<unsigned char> nonce = receivedPacket.getAAD();
+        vector<unsigned char> payload = receivedPacket.getPayload();
+    }
+    catch(const exception& ex){
+        cerr << "Error in getMessage(): " << ex.what() << endl;
+    }
+
+    // TO DO: Implement get message logic
+    // For now, just echo the received packet back to the client
+    // receivedPacket.send(client_socket);
+
+}
+
+void Server::addMessage(int& client_socket, const vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket) {
+    
+    try{
+        vector<unsigned char> clientNonce = receivedPacket.getAAD();
+        
+        // Sending back to the client a server nonce to be sure
+        // that the request of adding a message is not a replay attack
+        vector<unsigned char> nonce = generateRandomBytes(16);
+
+        // AAD is the concatenation of the client nonce and the server nonce
+        vector<unsigned char> aad(clientNonce);
+        aad.insert(aad.end(), nonce.begin(), nonce.end());
+
+        vector<unsigned char> payload;
+
+        // Construct the response packet
+        GeneralPacket responsePacket(aad, T_OK, payload);
+        // Send securely to the client
+        responsePacket.send(client_socket, postLoginSessionKey);
+
+        // Receive the message from the client
+        GeneralPacket messagePacket = GeneralPacket::receive(client_socket, postLoginSessionKey);
+        // Check if the message is not a replay attack
+        if(messagePacket.getAAD() != aad){
+            cout << "Replay attack detected." << endl;
+            cout << "Closing connection..." << endl;
+            close(client_socket);
+            client_socket = -1;
+            return;
+        }
+
+        vector<unsigned char> messagePayload = messagePacket.getPayload();
+        // Payload is the concatenation of the title, author, and body
+        // 1 Byte for the title length, title, 1 Byte for the author length, author, 1 Byte for the body length, body
+
+        uint8_t title_length = messagePayload[0];
+        string title(messagePayload.begin() + 1, messagePayload.begin() + 1 + title_length);
+
+        uint8_t author_length = messagePayload[1 + title_length];
+        string author(messagePayload.begin() + 1 + title_length + 1, messagePayload.begin() + 1 + title_length + 1 + author_length);
+
+        uint8_t body_length = messagePayload[1 + title_length + 1 + author_length];
+        string body(messagePayload.begin() + 1 + title_length + 1 + author_length + 1, messagePayload.begin() + 1 + title_length + 1 + author_length + 1 + body_length);
+
+        cout << "Received message:" << endl;
+        cout << "Title: " << title << endl;
+        cout << "Author: " << author << endl;
+        cout << "Body: " << body << endl;
+
+
+        try{
+            cout<<"Adding message to the Bulletin Board..."<<endl;
+            // Now we can save the message in the Bulletin Board
+            bulletinBoard.add(title, author, body);
+            cout << "Message added successfully." << endl;
+        }
+        catch(const exception& ex){
+            cerr << "Error in addMessage(): " << ex.what() << endl;
+            responsePacket.setType(T_KO);
+        }
+
+        // Send the response to the client
+        responsePacket.send(client_socket, postLoginSessionKey);
+        
+    }
+    catch(const exception& ex){
+        cerr << "Error in addMessage(): " << ex.what() << endl;
+    }
+
+    // TO DO: Implement add message logic
+    // For now, just echo the received packet back to the client
+    // receivedPacket.send(client_socket);
+}
+
 
 
 string Server::decryptMessage(const vector<unsigned char>& ciphertext, const vector<unsigned char>& sessionKey) {

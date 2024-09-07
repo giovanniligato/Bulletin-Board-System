@@ -18,6 +18,10 @@ public:
     vector<unsigned char> getPublicKey();
     void loadPeerPublicKey(const vector<unsigned char>& peerPublicKey);
     vector<unsigned char> computeSharedSecret();
+    
+    // Complete key exchange
+    vector<unsigned char> clientKeyExchange(int socket, vector<unsigned char> authKey, bool firstKeyExchange, int sessionKeyLength);
+    vector<unsigned char> serverKeyExchange(int socket, vector<unsigned char> authKey, bool firstKeyExchange, int sessionKeyLength);
 
 private:
     EVP_PKEY* pkey;

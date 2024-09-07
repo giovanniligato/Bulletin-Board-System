@@ -32,6 +32,10 @@ private:
     struct sockaddr_in serv_addr;
 
     vector<unsigned char> sessionKey;
+    vector<unsigned char> postLoginSessionKey;
+
+    string loggedInNickname;
+
 
     char buffer[BUFFER_SIZE] = {0};
     bool isLoggedIn = false;
@@ -44,9 +48,9 @@ private:
     void login();
     void logout();
     void postLoginMenu();
-    void listMessages(int n);
-    void getMessage(int mid);
-    void addMessage(const string& title, const string& author, const string& body);
+    void listMessages();
+    void getMessage();
+    void addMessage();
 };
 
 Client::Client(const string& serverAddress, int port) : port(port) {
@@ -82,86 +86,10 @@ void Client::connectToServer() {
         // Generate a random 16 byte ephemeral key, used for just for authentication purposes
         vector<unsigned char> authentication_key =  generateRandomBytes(16);
 
-        // Encrypt the authentication key using the server's public key
-        RSAWrapper rsaWrapper("Client/Storage/Keys/server_pubkey.pem", "");
-        vector<unsigned char> encrypted_authentication_key = rsaWrapper.encrypt(authentication_key, KeyType::Public);
-
-        // Generate the public key for the Diffie-Hellman key exchange
+        // Diffie-Hellman key exchange
         DHWrapper dhWrapper(1024);
-        vector<unsigned char> clientDH_public_key = dhWrapper.getPublicKey();
-
-        // Generate a nonce to prevent replay attacks
-        vector<unsigned char> nonce = generateRandomBytes(16);
-
-        vector<unsigned char> iv;
-        vector<unsigned char> tag;
-        vector<unsigned char> aad;
-
-        vector<unsigned char> plaintext;
-        vector<unsigned char> ciphertext;
-
-
-        // Insert into the aad the clientDH_public_key and the nonce
-        aad.insert(aad.end(), clientDH_public_key.begin(), clientDH_public_key.end());
-        aad.insert(aad.end(), nonce.begin(), nonce.end());
-
-        // Compute the authentication tag for the message clientDH_public_key || nonce
-        AESGCMWrapper::encrypt(authentication_key, plaintext, ciphertext, iv, tag, aad);
-
-        // Sending all to the server
-
-        // 256 Bytes
-        send(sock, encrypted_authentication_key.data(), encrypted_authentication_key.size(), 0);
-
-        // 12 Bytes
-        send(sock, iv.data(), iv.size(), 0);
-
-        // 670 Bytes
-        send(sock, aad.data(), aad.size(), 0);
-
-        // 16 Bytes
-        send(sock, tag.data(), tag.size(), 0);
-
-        // Receiving the server's public key and the nonce
-        
-        // Receiving the IV (12 bytes)
-        if (recv(sock, iv.data(), iv.size(), 0) < 0) {
-            throw runtime_error("Failed to receive the IV.");
-        }
-
-        // Receiving the AAD (670 bytes)
-        if (recv(sock, aad.data(), aad.size(), 0) < 0) {
-            throw runtime_error("Failed to receive the AAD.");
-        }
-
-        // Receiving the tag (16 bytes)
-        if (recv(sock, tag.data(), tag.size(), 0) < 0) {
-            throw runtime_error("Failed to receive the tag.");
-        }
-
-        // Check the tag for the AAD
-        plaintext = AESGCMWrapper::decrypt(authentication_key, ciphertext, iv, tag, aad);
-
-        // Extract the server's public key and nonce from the AAD (last 16 bytes are the nonce)
-        vector<unsigned char> serverDH_public_key(aad.begin(), aad.end() - 16);
-        vector<unsigned char> received_nonce(aad.end() - 16, aad.end());
-
-        // Check if the nonce is the same as the one sent
-        if (nonce != received_nonce) {
-            throw runtime_error("Nonce mismatch.");
-        }
-
-        // Load the server's public key
-        dhWrapper.loadPeerPublicKey(serverDH_public_key);
-
-        // Compute the shared secret
-        vector<unsigned char> DH_shared_secret = dhWrapper.computeSharedSecret();
-
-        // Before using the shared secret as the session key, it is a good practice to hash it
-        sessionKey = Hash::computeSHA256(DH_shared_secret);
-
         // As we are using AES128-GCM for symmetric encryption, we need a 128-bit key (16 bytes)
-        sessionKey.resize(16);
+        sessionKey = dhWrapper.clientKeyExchange(sock, authentication_key, true, 16);
 
     }
     catch (const exception& ex) {
@@ -257,16 +185,12 @@ void Client::registerUser() {
         // Send securely to the server
         registrationPacket.send(sock, sessionKey);
 
-        cout<<"Siamo qui."<<endl;
-
         // Receive the response from the server
         GeneralPacket responsePacket = GeneralPacket::receive(sock, sessionKey);
-        if(responsePacket.getNonce() != nonce) {
+        if(responsePacket.getAAD() != nonce) {
             cout << "Nonce mismatch." << endl;
             exit(-1);
         }
-
-        cout<<"Siamo dopo."<<endl;
 
         if(responsePacket.getType() == T_OK) {
             cout << "Challenge sent to your email." << endl;
@@ -293,7 +217,7 @@ void Client::registerUser() {
             // Receive the response from the server
             responsePacket = GeneralPacket::receive(sock, sessionKey);
 
-            if(responsePacket.getNonce() != nonce) {
+            if(responsePacket.getAAD() != nonce) {
                 cout << "Nonce mismatch." << endl;
                 exit(-1);
             }
@@ -345,33 +269,73 @@ void Client::registerUser() {
 }
 
 void Client::login() {
-    string nickname, password;
-    cout << "Enter nickname: ";
-    getline(cin, nickname);
-    cout << "Enter password: ";
-    getline(cin, password);
 
-    // Send login credentials to the server
-    string loginMessage = "LOGIN " + nickname + " " + password;
-    send(sock, loginMessage.c_str(), loginMessage.length(), 0);
+    try {
+        string nickname, password;
+        cout << "Enter nickname: ";
+        getline(cin, nickname);
+        password = getPassword();
 
-    // Receive the response from the server
-    int bytes_read = read(sock, buffer, BUFFER_SIZE);
-    if (bytes_read > 0) {
-        buffer[bytes_read] = '\0';
-        string response(buffer);
-        if (response == "OK") {
-            isLoggedIn = true;
-            cout << "Login successful." << endl;
-            postLoginMenu();
-        } else {
-            cout << "Login failed: " << response << endl;
+        // Send login credentials to the server
+        vector<unsigned char> nonce = generateRandomBytes(16);
+        vector<unsigned char> payload;
+
+        // Insert the nickname and password into the payload
+        // 1 Byte for the nickname length, nickname, 1 Byte for the password length, password
+        payload.push_back(nickname.length());
+        payload.insert(payload.end(), nickname.begin(), nickname.end());
+        payload.push_back(password.length());
+        payload.insert(payload.end(), password.begin(), password.end());
+
+        // Construct the packet
+        GeneralPacket loginPacket(nonce, T_LOGIN, payload);
+        // Send securely to the server
+        loginPacket.send(sock, sessionKey);
+
+        // Receive the response from the server
+        GeneralPacket responsePacket = GeneralPacket::receive(sock, sessionKey);
+        if(responsePacket.getAAD() != nonce) {
+            cout << "Nonce mismatch." << endl;
+            exit(-1);
         }
+
+        if(responsePacket.getType() == T_OK) {
+            isLoggedIn = true;
+            loggedInNickname = nickname;
+            cout << "Login successful." << endl;
+
+            // Here there's the need to start another instance of
+            // the DH key exchange to generate a new post-login session key
+            // because the requirements state that "Upon successful login, 
+            // a secure session is established and maintained until the 
+            // user logs out."
+            DHWrapper dhWrapper(1024);
+            postLoginSessionKey = dhWrapper.clientKeyExchange(sock, sessionKey, false, 16);
+
+            postLoginMenu();
+            return;
+        }
+        else if(responsePacket.getType() == T_KO) {
+            cout << "Login failed." << endl;
+            return;
+        }
+        else {
+            cout << "Not expected response type." << endl;
+            exit(-1);
+        }
+
     }
+    catch (const exception& ex) {
+        cerr << "Error in login(): " << ex.what() << endl;
+        exit(-1);
+    }
+    
 }
 
 void Client::logout() {
     isLoggedIn = false;
+    postLoginSessionKey.clear();
+    loggedInNickname.clear();
     cout << "Logged out successfully." << endl;
 }
 
@@ -390,30 +354,15 @@ void Client::postLoginMenu() {
 
         switch (choice) {
             case 1: {
-                int n;
-                cout << "Enter number of messages to list: ";
-                cin >> n;
-                cin.ignore();
-                listMessages(n);
+                listMessages();
                 break;
             }
             case 2: {
-                int mid;
-                cout << "Enter message ID to get: ";
-                cin >> mid;
-                cin.ignore();
-                getMessage(mid);
+                getMessage();
                 break;
             }
             case 3: {
-                string title, author, body;
-                cout << "Enter title: ";
-                getline(cin, title);
-                cout << "Enter author: ";
-                getline(cin, author);
-                cout << "Enter body: ";
-                getline(cin, body);
-                addMessage(title, author, body);
+                addMessage();
                 break;
             }
             case 4:
@@ -426,7 +375,12 @@ void Client::postLoginMenu() {
     }
 }
 
-void Client::listMessages(int n) {
+void Client::listMessages() {
+    int n;
+    cout << "Enter number of messages to list: ";
+    cin >> n;
+    cin.ignore();
+
     string listCommand = "LIST " + to_string(n);
     send(sock, listCommand.c_str(), listCommand.length(), 0);
 
@@ -437,7 +391,12 @@ void Client::listMessages(int n) {
     }
 }
 
-void Client::getMessage(int mid) {
+void Client::getMessage() {
+    int mid;
+    cout << "Enter message ID to get: ";
+    cin >> mid;
+    cin.ignore();
+    
     string getCommand = "GET " + to_string(mid);
     send(sock, getCommand.c_str(), getCommand.length(), 0);
 
@@ -448,15 +407,99 @@ void Client::getMessage(int mid) {
     }
 }
 
-void Client::addMessage(const string& title, const string& author, const string& body) {
-    string addCommand = "ADD " + title + " " + author + " " + body;
-    send(sock, addCommand.c_str(), addCommand.length(), 0);
+void Client::addMessage() {
+    string title, body;
+    cout << "Enter title: ";
+    getline(cin, title);
+    cout << "Enter body: ";
+    getline(cin, body);
 
-    int bytes_read = read(sock, buffer, BUFFER_SIZE);
-    if (bytes_read > 0) {
-        buffer[bytes_read] = '\0';
-        cout << "Server response:\n" << buffer << endl;
+    // Ask the Server the possibility to add a message
+    // In this way it will send back a its nonce to be
+    // used in next packets
+    vector<unsigned char> nonce = generateRandomBytes(16);
+    vector<unsigned char> payload;
+
+    // Construct the packet
+    GeneralPacket addMessagePacket(nonce, T_ADD, payload);
+    // Send securely to the server
+    addMessagePacket.send(sock, postLoginSessionKey);
+
+    // Receive the response from the server
+    GeneralPacket responsePacket = GeneralPacket::receive(sock, postLoginSessionKey);
+
+    // First 16 bytes of the aad are the client nonce
+    // The next 16 bytes are the server nonce
+    vector<unsigned char> receivedClientNonce(responsePacket.getAAD().begin(), responsePacket.getAAD().begin() + 16);
+    vector<unsigned char> serverNonce(responsePacket.getAAD().begin() + 16, responsePacket.getAAD().end());
+    if(receivedClientNonce != nonce) {
+        cout << "Nonce mismatch." << endl;
+        exit(-1);
     }
+
+    if(responsePacket.getType() == T_OK) {
+        // The server nonce is received, now we can send the message to be added
+
+        // AAD is composed by the client nonce and the server nonce
+        vector<unsigned char> aad(nonce);
+        aad.insert(aad.end(), serverNonce.begin(), serverNonce.end());
+
+        payload.clear();
+        // Pyaload is composed by the title, the author and the body
+        // 1 Byte for the title length, title, 1 Byte for the author length, author, 1 Byte for the body length, body
+        payload.push_back(title.length());
+        payload.insert(payload.end(), title.begin(), title.end());
+        payload.push_back(loggedInNickname.length());
+        payload.insert(payload.end(), loggedInNickname.begin(), loggedInNickname.end());
+        payload.push_back(body.length());
+        payload.insert(payload.end(), body.begin(), body.end());
+
+        // Construct the packet
+        addMessagePacket.setADD(aad);
+        addMessagePacket.setPayload(payload);
+
+        // Send securely to the server
+        addMessagePacket.send(sock, postLoginSessionKey);
+
+        // Receive the response from the server
+        responsePacket = GeneralPacket::receive(sock, postLoginSessionKey);
+        cout <<"Received response packet." << endl;
+        if(responsePacket.getAAD() != aad) {
+            cout << "Nonces mismatch." << endl;
+            exit(-1);
+        }
+
+        if(responsePacket.getType() == T_OK) {
+            cout << "Message added successfully." << endl;
+            return;
+        }
+        else if(responsePacket.getType() == T_KO) {
+            cout << "Impossible to add the message." << endl;
+            return;
+        }
+        else {
+            cout << "Not expected response type." << endl;
+            exit(-1);
+        }
+
+    }
+    else if(responsePacket.getType() == T_KO) {
+        cout << "Impossible to add the message." << endl;
+        return;
+    }
+    else {
+        cout << "Not expected response type." << endl;
+        exit(-1);
+    }
+
+    // string addCommand = "ADD " + title + " " + loggedInNickname + " " + body;
+    // send(sock, addCommand.c_str(), addCommand.length(), 0);
+
+    // int bytes_read = read(sock, buffer, BUFFER_SIZE);
+    // if (bytes_read > 0) {
+    //     buffer[bytes_read] = '\0';
+    //     cout << "Server response:\n" << buffer << endl;
+    // }
 }
 
 void Client::run() {
