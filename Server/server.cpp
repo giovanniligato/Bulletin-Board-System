@@ -248,7 +248,7 @@ void Server::processClientRequests(int client_socket, const vector<unsigned char
                         client_socket = -1;
                         break;
                     }
-                    cout << "Received LOGOUT request." << endl;
+                    cout << "User logged out." << endl;
                     postLoginSessionKey.clear();
                     break;
                 default:

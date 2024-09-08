@@ -333,6 +333,16 @@ void Client::login() {
 }
 
 void Client::logout() {
+    
+    vector<unsigned char> nonce;
+    vector<unsigned char> payload;
+
+    // Construct the packet
+    GeneralPacket logoutPacket(nonce, T_LOGOUT, payload);
+
+    // Send securely to the server
+    logoutPacket.send(sock, postLoginSessionKey);
+
     isLoggedIn = false;
     postLoginSessionKey.clear();
     loggedInNickname.clear();
