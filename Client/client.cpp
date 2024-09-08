@@ -376,35 +376,160 @@ void Client::postLoginMenu() {
 }
 
 void Client::listMessages() {
-    int n;
-    cout << "Enter number of messages to list: ";
+    uint32_t n;
+    cout << "Enter number of latest messages to list (if available): ";
     cin >> n;
     cin.ignore();
 
-    string listCommand = "LIST " + to_string(n);
-    send(sock, listCommand.c_str(), listCommand.length(), 0);
+    vector<unsigned char> nonce = generateRandomBytes(16);
+    vector<unsigned char> payload;
+    
+    // Adding n to the payload
+    payload.push_back((n >> 24) & 0xFF);
+    payload.push_back((n >> 16) & 0xFF);
+    payload.push_back((n >> 8) & 0xFF);
+    payload.push_back(n & 0xFF);
 
-    int bytes_read = read(sock, buffer, BUFFER_SIZE);
-    if (bytes_read > 0) {
-        buffer[bytes_read] = '\0';
-        cout << "Messages:\n" << buffer << endl;
+    // Construct the packet
+    GeneralPacket listMessagesPacket(nonce, T_LIST, payload);
+
+    // Send securely to the server
+    listMessagesPacket.send(sock, postLoginSessionKey);
+
+    // Receive the response from the server
+    GeneralPacket responsePacket = GeneralPacket::receive(sock, postLoginSessionKey);
+    if(responsePacket.getAAD() != nonce) {
+        cout << "Nonce mismatch." << endl;
+        exit(-1);
     }
+
+    if(responsePacket.getType() == T_OK) {
+        // Inside the payload there are:
+        // 4 Bytes indicating the actual number of messages
+        // (because the server may not have n messages to list)
+        // Then, for each message, there are:
+        // 4 Bytes for the message ID
+        // 2 Bytes for the title length, title, 
+        // 2 Bytes for the author length, author
+        // 2 Bytes for the body length, body
+        vector<unsigned char> listMessagesPayload = responsePacket.getPayload();
+        uint32_t actualNumberOfMessages = (listMessagesPayload[0] << 24) | (listMessagesPayload[1] << 16) | (listMessagesPayload[2] << 8) | listMessagesPayload[3];
+        // Remove the actual number of messages from the payload
+        listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + 4);
+
+        if(actualNumberOfMessages == 0) {
+            cout << "No messages to list." << endl;
+            return;
+        }
+
+        cout << endl << actualNumberOfMessages << " Messages found:" << endl << endl;
+        for (uint32_t i = 0; i < actualNumberOfMessages; i++) {
+            uint32_t mid = (listMessagesPayload[0] << 24) | (listMessagesPayload[1] << 16) | (listMessagesPayload[2] << 8) | listMessagesPayload[3];
+            listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + 4);
+            uint16_t titleLength = (listMessagesPayload[0] << 8) | listMessagesPayload[1];
+            listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + 2);
+            string title(listMessagesPayload.begin(), listMessagesPayload.begin() + titleLength);
+            listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + titleLength);
+            uint16_t authorLength = (listMessagesPayload[0] << 8) | listMessagesPayload[1];
+            listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + 2);
+            string author(listMessagesPayload.begin(), listMessagesPayload.begin() + authorLength);
+            listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + authorLength);
+            uint16_t bodyLength = (listMessagesPayload[0] << 8) | listMessagesPayload[1];
+            listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + 2);
+            string body(listMessagesPayload.begin(), listMessagesPayload.begin() + bodyLength);
+            listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + bodyLength);
+
+            cout << "Message ID: " << mid << endl;
+            cout << "Title: " << title << endl;
+            cout << "Author: " << author << endl;
+            cout << "Body: " << body << endl;
+            cout << endl;
+        }
+
+        cout << "End of messages." << endl;
+
+        return;
+    
+    }
+    else if(responsePacket.getType() == T_KO) {
+        cout << "Impossible to list the messages." << endl;
+        return;
+    }
+    else {
+        cout << "Not expected response type." << endl;
+        exit(-1);
+    }
+
 }
 
 void Client::getMessage() {
-    int mid;
+    uint32_t mid;
     cout << "Enter message ID to get: ";
     cin >> mid;
     cin.ignore();
     
-    string getCommand = "GET " + to_string(mid);
-    send(sock, getCommand.c_str(), getCommand.length(), 0);
+    vector<unsigned char> nonce = generateRandomBytes(16);
+    vector<unsigned char> payload;
 
-    int bytes_read = read(sock, buffer, BUFFER_SIZE);
-    if (bytes_read > 0) {
-        buffer[bytes_read] = '\0';
-        cout << "Message:\n" << buffer << endl;
+    // Adding mid to the payload
+    payload.push_back((mid >> 24) & 0xFF);
+    payload.push_back((mid >> 16) & 0xFF);
+    payload.push_back((mid >> 8) & 0xFF);
+    payload.push_back(mid & 0xFF);
+
+    // Construct the packet
+    GeneralPacket getMessagePacket(nonce, T_GET, payload);
+
+    // Send securely to the server
+    getMessagePacket.send(sock, postLoginSessionKey);
+
+    // Receive the response from the server
+    GeneralPacket responsePacket = GeneralPacket::receive(sock, postLoginSessionKey);
+    if(responsePacket.getAAD() != nonce) {
+        cout << "Nonce mismatch." << endl;
+        exit(-1);
     }
+
+    cout << endl;
+    if(responsePacket.getType() == T_OK) {
+        // Inside the payload there are:
+        // 4 Bytes for the message ID
+        // 2 Bytes for the title length, title, 
+        // 2 Bytes for the author length, author
+        // 2 Bytes for the body length, body
+        vector<unsigned char> getMessagePayload = responsePacket.getPayload();
+        uint32_t mid = (getMessagePayload[0] << 24) | (getMessagePayload[1] << 16) | (getMessagePayload[2] << 8) | getMessagePayload[3];
+        getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + 4);
+        uint16_t titleLength = (getMessagePayload[0] << 8) | getMessagePayload[1];
+        getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + 2);
+        string title(getMessagePayload.begin(), getMessagePayload.begin() + titleLength);
+        getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + titleLength);
+        uint16_t authorLength = (getMessagePayload[0] << 8) | getMessagePayload[1];
+        getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + 2);
+        string author(getMessagePayload.begin(), getMessagePayload.begin() + authorLength);
+        getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + authorLength);
+        uint16_t bodyLength = (getMessagePayload[0] << 8) | getMessagePayload[1];
+        getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + 2);
+        string body(getMessagePayload.begin(), getMessagePayload.begin() + bodyLength);
+        getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + bodyLength);
+
+        cout << "Message ID: " << mid << endl;
+        cout << "Title: " << title << endl;
+        cout << "Author: " << author << endl;
+        cout << "Body: " << body << endl;
+
+        return;
+    
+    }
+    else if(responsePacket.getType() == T_KO) {
+        cout << "Impossible to get the message." << endl;
+        return;
+    }
+    else {
+        cout << "Not expected response type." << endl;
+        exit(-1);
+    }
+    
 }
 
 void Client::addMessage() {
@@ -446,14 +571,17 @@ void Client::addMessage() {
 
         payload.clear();
         // Pyaload is composed by the title, the author and the body
-        // 1 Byte for the title length, title, 1 Byte for the author length, author, 1 Byte for the body length, body
-        payload.push_back(title.length());
+        // 2 Byte for the title length, title, 2 Byte for the author length, author, 2 Byte for the body length, body
+        payload.push_back((title.length() >> 8) & 0xFF);
+        payload.push_back(title.length() & 0xFF);
         payload.insert(payload.end(), title.begin(), title.end());
-        payload.push_back(loggedInNickname.length());
+        payload.push_back((loggedInNickname.length() >> 8) & 0xFF);
+        payload.push_back(loggedInNickname.length() & 0xFF);
         payload.insert(payload.end(), loggedInNickname.begin(), loggedInNickname.end());
-        payload.push_back(body.length());
+        payload.push_back((body.length() >> 8) & 0xFF);
+        payload.push_back(body.length() & 0xFF);
         payload.insert(payload.end(), body.begin(), body.end());
-
+        
         // Construct the packet
         addMessagePacket.setADD(aad);
         addMessagePacket.setPayload(payload);
@@ -492,14 +620,6 @@ void Client::addMessage() {
         exit(-1);
     }
 
-    // string addCommand = "ADD " + title + " " + loggedInNickname + " " + body;
-    // send(sock, addCommand.c_str(), addCommand.length(), 0);
-
-    // int bytes_read = read(sock, buffer, BUFFER_SIZE);
-    // if (bytes_read > 0) {
-    //     buffer[bytes_read] = '\0';
-    //     cout << "Server response:\n" << buffer << endl;
-    // }
 }
 
 void Client::run() {

@@ -434,6 +434,66 @@ void Server::listMessages(int client_socket, const vector<unsigned char>& postLo
         vector<unsigned char> nonce = receivedPacket.getAAD();
         vector<unsigned char> payload = receivedPacket.getPayload();
 
+        // Extract the number of messages to list from the payload (uint32_t)
+        uint32_t numMessages = (payload[0] << 24) | (payload[1] << 16) | (payload[2] << 8) | payload[3];
+
+        cout << "Received list request for " << numMessages << " messages." << endl;
+
+        payload.clear();
+        GeneralPacket responsePacket(nonce, T_OK, payload);
+
+        vector<BulletinBoard::Message> messages;
+        try {
+            // Get the list of messages from the Bulletin Board
+            messages = bulletinBoard.list(numMessages);
+        }
+        catch(const exception& ex){
+            cerr << "Error in listMessages(): " << ex.what() << endl;
+            responsePacket.setType(T_KO);
+            responsePacket.send(client_socket, postLoginSessionKey);
+            return;
+        }
+
+        cout << "Actual number of messages to list: " << messages.size() << endl;
+
+        // Construct the payload to send back to the client
+        // 4 Bytes for the actual number of messages to list,
+        // then for each message: 
+        // 4 Bytes for the message ID, 
+        // 2 Bytes for the title length, title, 
+        // 2 Bytes for the author length, author, 
+        // 2 Bytes for the body length, body
+        payload.push_back((messages.size() >> 24) & 0xFF);
+        payload.push_back((messages.size() >> 16) & 0xFF);
+        payload.push_back((messages.size() >> 8) & 0xFF);
+        payload.push_back(messages.size() & 0xFF);
+
+        for (const auto& msg : messages) {
+            payload.push_back((msg.identifier >> 24) & 0xFF);
+            payload.push_back((msg.identifier >> 16) & 0xFF);
+            payload.push_back((msg.identifier >> 8) & 0xFF);
+            payload.push_back(msg.identifier & 0xFF);
+
+            uint16_t title_length = msg.title.size();
+            payload.push_back((title_length >> 8) & 0xFF);
+            payload.push_back(title_length & 0xFF);
+            payload.insert(payload.end(), msg.title.begin(), msg.title.end());
+
+            uint16_t author_length = msg.author.size();
+            payload.push_back((author_length >> 8) & 0xFF);
+            payload.push_back(author_length & 0xFF);
+            payload.insert(payload.end(), msg.author.begin(), msg.author.end());
+
+            uint16_t body_length = msg.body.size();
+            payload.push_back((body_length >> 8) & 0xFF);
+            payload.push_back(body_length & 0xFF);
+            payload.insert(payload.end(), msg.body.begin(), msg.body.end());
+
+        }
+
+        // Send the response to the client
+        responsePacket.setPayload(payload);
+        responsePacket.send(client_socket, postLoginSessionKey);
 
     }
     catch(const exception& ex){
@@ -451,6 +511,57 @@ void Server::getMessage(int client_socket, const vector<unsigned char>& postLogi
 
         vector<unsigned char> nonce = receivedPacket.getAAD();
         vector<unsigned char> payload = receivedPacket.getPayload();
+        
+        // Extract the message ID from the payload (uint32_t)
+        uint32_t messageID = (payload[0] << 24) | (payload[1] << 16) | (payload[2] << 8) | payload[3];
+
+        cout << "Received GET request for message ID " << messageID << "." << endl;
+
+        payload.clear();
+        GeneralPacket responsePacket(nonce, T_OK, payload);
+
+        BulletinBoard::Message message;
+        try {
+            // Get the message from the Bulletin Board
+            message = bulletinBoard.get(messageID);
+        }
+        catch(const exception& ex){
+            cerr << "Error in bulletinBoard.get(): " << ex.what() << endl;
+            responsePacket.setType(T_KO);
+            responsePacket.send(client_socket, postLoginSessionKey);
+            return;
+        }
+
+        // Construct the payload to send back to the client
+        // 4 Bytes for the message ID,
+        // 2 Bytes for the title length, title,
+        // 2 Bytes for the author length, author,
+        // 2 Bytes for the body length, body
+
+        payload.push_back((message.identifier >> 24) & 0xFF);
+        payload.push_back((message.identifier >> 16) & 0xFF);
+        payload.push_back((message.identifier >> 8) & 0xFF);
+        payload.push_back(message.identifier & 0xFF);
+        
+        uint16_t title_length = message.title.size();
+        payload.push_back((title_length >> 8) & 0xFF);
+        payload.push_back(title_length & 0xFF);
+        payload.insert(payload.end(), message.title.begin(), message.title.end());
+        
+        uint16_t author_length = message.author.size();
+        payload.push_back((author_length >> 8) & 0xFF);
+        payload.push_back(author_length & 0xFF);
+        payload.insert(payload.end(), message.author.begin(), message.author.end());
+
+        uint16_t body_length = message.body.size();
+        payload.push_back((body_length >> 8) & 0xFF);
+        payload.push_back(body_length & 0xFF);
+        payload.insert(payload.end(), message.body.begin(), message.body.end());
+
+        // Send the response to the client
+        responsePacket.setPayload(payload);
+        responsePacket.send(client_socket, postLoginSessionKey);
+
     }
     catch(const exception& ex){
         cerr << "Error in getMessage(): " << ex.what() << endl;
@@ -495,16 +606,16 @@ void Server::addMessage(int& client_socket, const vector<unsigned char>& postLog
 
         vector<unsigned char> messagePayload = messagePacket.getPayload();
         // Payload is the concatenation of the title, author, and body
-        // 1 Byte for the title length, title, 1 Byte for the author length, author, 1 Byte for the body length, body
+        // 2 Byte for the title length, title, 2 Byte for the author length, author, 2 Byte for the body length, body
 
-        uint8_t title_length = messagePayload[0];
-        string title(messagePayload.begin() + 1, messagePayload.begin() + 1 + title_length);
+        uint16_t title_length = (messagePayload[0] << 8) | messagePayload[1];
+        string title(messagePayload.begin() + 2, messagePayload.begin() + 2 + title_length);
 
-        uint8_t author_length = messagePayload[1 + title_length];
-        string author(messagePayload.begin() + 1 + title_length + 1, messagePayload.begin() + 1 + title_length + 1 + author_length);
+        uint16_t author_length = (messagePayload[2 + title_length] << 8) | messagePayload[2 + title_length + 1];
+        string author(messagePayload.begin() + 2 + title_length + 2, messagePayload.begin() + 2 + title_length + 2 + author_length);
 
-        uint8_t body_length = messagePayload[1 + title_length + 1 + author_length];
-        string body(messagePayload.begin() + 1 + title_length + 1 + author_length + 1, messagePayload.begin() + 1 + title_length + 1 + author_length + 1 + body_length);
+        uint16_t body_length = (messagePayload[2 + title_length + 2 + author_length] << 8) | messagePayload[2 + title_length + 2 + author_length + 1];
+        string body(messagePayload.begin() + 2 + title_length + 2 + author_length + 2, messagePayload.begin() + 2 + title_length + 2 + author_length + 2 + body_length);
 
         cout << "Received message:" << endl;
         cout << "Title: " << title << endl;
