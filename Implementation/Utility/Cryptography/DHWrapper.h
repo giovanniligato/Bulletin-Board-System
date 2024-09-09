@@ -20,8 +20,8 @@ public:
     vector<unsigned char> computeSharedSecret();
     
     // Complete key exchange
-    vector<unsigned char> clientKeyExchange(int socket, vector<unsigned char> authKey, bool firstKeyExchange, int sessionKeyLength);
-    vector<unsigned char> serverKeyExchange(int socket, vector<unsigned char> authKey, bool firstKeyExchange, int sessionKeyLength);
+    vector<unsigned char> clientKeyExchange(int socket, int sessionKeyLength);
+    vector<unsigned char> serverKeyExchange(int socket, int sessionKeyLength);
 
 private:
     EVP_PKEY* pkey;

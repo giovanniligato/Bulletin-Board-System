@@ -5,6 +5,7 @@
 #include "RSAWrapper.h"
 #include "Randomness.h"
 #include "Hash.h"
+#include "../../Packets/StartPacket.h"
 
 // Constructor: Generate or load Diffie-Hellman parameters and keys
 DHWrapper::DHWrapper(int keyLength) : pkey(nullptr), peerKey(nullptr), keyLength(keyLength) {
@@ -155,77 +156,47 @@ EVP_PKEY* DHWrapper::generateDHKeyPair(int keyLength) {
 
 
 // Complete key exchange (client side)
-vector<unsigned char> DHWrapper::clientKeyExchange(int socket, vector<unsigned char> authKey, bool firstKeyExchange, int sessionKeyLength) {
+vector<unsigned char> DHWrapper::clientKeyExchange(int socket, int sessionKeyLength) {
 
     if (sessionKeyLength > 32) {
         throw invalid_argument("Session key length must be at most 32 bytes.");
     }
 
+    // Generate a random 16 byte ephemeral key, used for just for authentication purposes
+    vector<unsigned char> authKey =  generateRandomBytes(16);
 
-    if (firstKeyExchange){
-        // Encrypt the authentication key with the server's public key
-        RSAWrapper rsaWrapper("Client/Storage/Keys/server_pubkey.pem", "");
-        vector<unsigned char> encrypted_authKey = rsaWrapper.encrypt(authKey, KeyType::Public);
+    // Encrypt the authentication key with the server's public key
+    RSAWrapper rsaWrapper("Client/Storage/Keys/server_pubkey.pem", "");
+    vector<unsigned char> encrypted_authKey = rsaWrapper.encrypt(authKey, KeyType::Public);
 
-        // Send the encrypted authentication key to the server
-        
-        // 256 Bytes
-        send(socket, encrypted_authKey.data(), encrypted_authKey.size(), 0);
-    }
+    // Send the encrypted authentication key to the server
+    
+    // 256 Bytes
+    send(socket, encrypted_authKey.data(), encrypted_authKey.size(), 0);
 
     vector<unsigned char> DH_public_key = getPublicKey();
 
     // Generate a nonce to prevent replay attacks
     vector<unsigned char> nonce = generateRandomBytes(16);
 
-    vector<unsigned char> iv;
-    vector<unsigned char> tag;
     vector<unsigned char> aad;
-
-    vector<unsigned char> plaintext;
-    vector<unsigned char> ciphertext;
 
     // Insert into the aad the DH_public_key and the nonce
     aad.insert(aad.end(), DH_public_key.begin(), DH_public_key.end());
     aad.insert(aad.end(), nonce.begin(), nonce.end());
 
-    // Compute the authentication tag for the message DH_public_key || nonce
-    AESGCMWrapper::encrypt(authKey, plaintext, ciphertext, iv, tag, aad);
+    // Construct the StartPacket
+    StartPacket startPacket(aad);
 
-    // Sending all to the server
+    // Securely send the StartPacket to the server
+    startPacket.send(socket, authKey);
 
-    // 12 Bytes
-    send(socket, iv.data(), iv.size(), 0);
-
-    // 670 Bytes
-    send(socket, aad.data(), aad.size(), 0);
-
-    // 16 Bytes
-    send(socket, tag.data(), tag.size(), 0);
-
-    // Receiving the server's public key and the nonce
-
-    // Receiving the IV (12 Bytes)
-    if (recv(socket, iv.data(), iv.size(), 0) < 0) {
-        throw runtime_error("Failed to receive IV");
-    }
-
-    // Receiving the AAD (670 bytes)
-    if (recv(socket, aad.data(), aad.size(), 0) < 0) {
-        throw runtime_error("Failed to receive the AAD.");
-    }
-
-    // Receiving the tag (16 bytes)
-    if (recv(socket, tag.data(), tag.size(), 0) < 0) {
-        throw runtime_error("Failed to receive the tag.");
-    }
-
-    // Check the tag for the AAD
-    plaintext = AESGCMWrapper::decrypt(authKey, ciphertext, iv, tag, aad);
+    // Receive the response from the server
+    StartPacket receivedStartPacket = StartPacket::receive(socket, authKey);
 
     // Extract the server's public key and nonce from the AAD (last 16 bytes are the nonce)
-    vector<unsigned char> server_DH_public_key(aad.begin(), aad.end() - 16);
-    vector<unsigned char> received_nonce(aad.end() - 16, aad.end());
+    vector<unsigned char> server_DH_public_key(receivedStartPacket.getAAD().begin(), receivedStartPacket.getAAD().end() - 16);
+    vector<unsigned char> received_nonce(receivedStartPacket.getAAD().end() - 16, receivedStartPacket.getAAD().end());
 
     // Check if the nonce is the same as the one sent
     if (nonce != received_nonce) {
@@ -248,51 +219,34 @@ vector<unsigned char> DHWrapper::clientKeyExchange(int socket, vector<unsigned c
 }
 
 // Complete key exchange (server side)
-vector<unsigned char> DHWrapper::serverKeyExchange(int socket, vector<unsigned char> authKey, bool firstKeyExchange, int sessionKeyLength) {
+vector<unsigned char> DHWrapper::serverKeyExchange(int socket, int sessionKeyLength) {
 
     if (sessionKeyLength > 32) {
         throw invalid_argument("Session key length must be at most 32 bytes.");
     }
 
-    if (firstKeyExchange){
-        // Receive the encrypted authentication key from the client
+    // Receive the encrypted authentication key from the client
         
-        // 256 Bytes
-        vector<unsigned char> encrypted_authKey(256);
-        if (recv(socket, encrypted_authKey.data(), encrypted_authKey.size(), 0) < 0) {
-            throw runtime_error("Failed to receive encrypted authentication key");
+    // 256 Bytes
+    vector<unsigned char> encrypted_authKey(256);
+    int res = recv(socket, encrypted_authKey.data(), encrypted_authKey.size(), 0);
+    if (res <= 0) {
+        if (res == 0) {
+            throw runtime_error("Connection closed by peer");
         }
-
-        // Decrypt the authentication key with the server's private key
-        RSAWrapper rsaWrapper("", "Server/Storage/Keys/server_privkey.pem");
-        authKey = rsaWrapper.decrypt(encrypted_authKey, KeyType::Private);
+        throw runtime_error("Failed to receive encrypted authentication key");
     }
 
-    // Receiving the IV (12 Bytes)
-    vector<unsigned char> iv(12);
-    if (recv(socket, iv.data(), iv.size(), 0) < 0) {
-        throw runtime_error("Failed to receive IV");
-    }
+    // Decrypt the authentication key with the server's private key
+    RSAWrapper rsaWrapper("", "Server/Storage/Keys/server_privkey.pem");
+    vector<unsigned char> authKey = rsaWrapper.decrypt(encrypted_authKey, KeyType::Private);
 
-    // Receiving the AAD (670 bytes)
-    vector<unsigned char> aad(670);
-    if (recv(socket, aad.data(), aad.size(), 0) < 0) {
-        throw runtime_error("Failed to receive the AAD.");
-    }
-
-    // Receiving the tag (16 bytes)
-    vector<unsigned char> tag(16);
-    if (recv(socket, tag.data(), tag.size(), 0) < 0) {
-        throw runtime_error("Failed to receive the tag.");
-    }
-
-    // Check the tag for the AAD
-    vector<unsigned char> ciphertext;
-    vector<unsigned char> plaintext = AESGCMWrapper::decrypt(authKey, ciphertext, iv, tag, aad);
+    // Receive the StartPacket from the client
+    StartPacket startPacket = StartPacket::receive(socket, authKey);
 
     // Extract the client's public key and nonce from the AAD (last 16 bytes are the nonce)
-    vector<unsigned char> client_DH_public_key(aad.begin(), aad.end() - 16);
-    vector<unsigned char> nonce(aad.end() - 16, aad.end());
+    vector<unsigned char> client_DH_public_key(startPacket.getAAD().begin(), startPacket.getAAD().end() - 16);
+    vector<unsigned char> nonce(startPacket.getAAD().end() - 16, startPacket.getAAD().end());
 
     // Generate the server's public key
     vector<unsigned char> DH_public_key = getPublicKey();
@@ -300,23 +254,15 @@ vector<unsigned char> DHWrapper::serverKeyExchange(int socket, vector<unsigned c
     // Sending back to the client the server's public key and the nonce
 
     // Insert into the aad the DH_public_key and the nonce
-    aad.clear();
+    vector<unsigned char> aad;
     aad.insert(aad.end(), DH_public_key.begin(), DH_public_key.end());
     aad.insert(aad.end(), nonce.begin(), nonce.end());
 
-    // Compute the authentication tag for the message DH_public_key || nonce
-    AESGCMWrapper::encrypt(authKey, plaintext, ciphertext, iv, tag, aad);
+    // Construct the StartPacket
+    StartPacket responseStartPacket(aad);
 
-    // Sending all to the client
-    
-    // 12 Bytes
-    send(socket, iv.data(), iv.size(), 0);
-
-    // 670 Bytes
-    send(socket, aad.data(), aad.size(), 0);
-
-    // 16 Bytes
-    send(socket, tag.data(), tag.size(), 0);
+    // Securely send the StartPacket to the client
+    responseStartPacket.send(socket, authKey);
 
     // Load the client's public key
     loadPeerPublicKey(client_DH_public_key);

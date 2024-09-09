@@ -22,8 +22,7 @@
 using namespace std;
 
 #define DEFAULT_PORT 3030
-#define BUFFER_SIZE 1024
-#define MAX_CLIENTS 5
+#define MAX_CLIENTS 10
 
 class Server {
 public:
@@ -42,11 +41,11 @@ private:
 
     static void clientHandler(int client_socket);
     static void signalHandler(int signal);
-    static void performKeyExchange(int client_socket, vector<unsigned char>& sessionKey);
-    static void processClientRequests(int client_socket, const vector<unsigned char>& sessionKey);
+    static vector<unsigned char> performKeyExchange(int client_socket);
+    static void processClientRequests(int client_socket);
     
     static void registerUser(int client_socket, const vector<unsigned char>& sessionKey, GeneralPacket receivedPacket);
-    static void loginUser(int client_socket, const vector<unsigned char>& sessionKey, vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket);
+    static void loginUser(int client_socket, const vector<unsigned char>& tempKey, vector<unsigned char>& sessionKey, GeneralPacket receivedPacket);
 
     static void listMessages(int client_socket, const vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket);
     static void getMessage(int client_socket, const vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket);
@@ -143,72 +142,74 @@ void Server::start() {
 
 void Server::clientHandler(int client_socket) {
     
-    vector<unsigned char> sessionKey;
-
-    // Step 1: Perform key exchange with the client to establish a secure session
-    performKeyExchange(client_socket, sessionKey);
-
-    // Step 2: Process client requests using the established session key
-    processClientRequests(client_socket, sessionKey);
+    // Process client requests
+    processClientRequests(client_socket);
 
     // Close the client socket after the session ends
     close(client_socket);
     cout << "Client disconnected." << endl;
 }
 
-void Server::performKeyExchange(int client_socket, vector<unsigned char>& sessionKey) {
+vector<unsigned char> Server::performKeyExchange(int client_socket) {
+
+    vector<unsigned char> key;
 
     try {
 
         // Diffie-Hellman key exchange
         DHWrapper dhWrapper(1024);
         
-        vector<unsigned char> authKey;
         // As we are using AES128-GCM for symmetric encryption, we need a 128-bit key (16 bytes)
-        sessionKey = dhWrapper.serverKeyExchange(client_socket, authKey, true, 16);
-
+        key = dhWrapper.serverKeyExchange(client_socket, 16);
     }
     catch (const exception& ex) {
-        cerr << "Error in connectToServer(): " << ex.what() << endl;
+        // If connection closed by peer throw again the exception
+        if (strcmp(ex.what(), "Connection closed by peer") == 0) {
+            throw;
+        }
+        cerr << "Error in performKeyExchange(): " << ex.what() << endl;
     }
 
+    return key;
 }
 
-void Server::processClientRequests(int client_socket, const vector<unsigned char>& sessionKey) {
+void Server::processClientRequests(int client_socket) {
 
-    vector<unsigned char> postLoginSessionKey;
+    vector<unsigned char> sessionKey;
 
     try{
 
         while(client_socket > 0){
-            GeneralPacket receivedPacket = postLoginSessionKey.empty()
-                                         ? GeneralPacket::receive(client_socket, sessionKey)
-                                         : GeneralPacket::receive(client_socket, postLoginSessionKey);
+            
+            vector<unsigned char> tempKey = sessionKey.empty()
+                                            ? performKeyExchange(client_socket)
+                                            : sessionKey;
 
+            GeneralPacket receivedPacket = GeneralPacket::receive(client_socket, tempKey);
 
             switch(receivedPacket.getType()){
                 case T_REGISTRATION:
-                    if(!postLoginSessionKey.empty()){
+                    if(!sessionKey.empty()){
                         cout << "Cannot register when user is logged in." << endl;
                         cout << "Closing connection..." << endl;
                         close(client_socket);
                         client_socket = -1;
                         break;
                     }
-                    registerUser(client_socket, sessionKey, receivedPacket);
+                    registerUser(client_socket, tempKey, receivedPacket);
                     break;
                 case T_LOGIN:
-                    if(!postLoginSessionKey.empty()){
+                    if(!sessionKey.empty()){
                         cout << "User already logged in." << endl;
                         cout << "Closing connection..." << endl;
                         close(client_socket);
                         client_socket = -1;
                         break;
                     }
-                    loginUser(client_socket, sessionKey, postLoginSessionKey, receivedPacket);
+                    loginUser(client_socket, tempKey, sessionKey, receivedPacket);
                     break;
                 case T_LIST:
-                    if(postLoginSessionKey.empty()){
+                    if(sessionKey.empty()){
                         cout << "Cannot list when user is not logged in." << endl;
                         cout << "Closing connection..." << endl;
                         close(client_socket);
@@ -216,10 +217,10 @@ void Server::processClientRequests(int client_socket, const vector<unsigned char
                         break;
                     }
                     cout << "Received LIST request." << endl;
-                    listMessages(client_socket, postLoginSessionKey, receivedPacket);
+                    listMessages(client_socket, sessionKey, receivedPacket);
                     break;
                 case T_GET:
-                    if(postLoginSessionKey.empty()){
+                    if(sessionKey.empty()){
                         cout << "Cannot get when user is not logged in." << endl;
                         cout << "Closing connection..." << endl;
                         close(client_socket);
@@ -227,10 +228,10 @@ void Server::processClientRequests(int client_socket, const vector<unsigned char
                         break;
                     }
                     cout << "Received GET request." << endl;
-                    getMessage(client_socket, postLoginSessionKey, receivedPacket);
+                    getMessage(client_socket, sessionKey, receivedPacket);
                     break;
                 case T_ADD:
-                    if(postLoginSessionKey.empty()){
+                    if(sessionKey.empty()){
                         cout << "Cannot add when user is not logged in." << endl;
                         cout << "Closing connection..." << endl;
                         close(client_socket);
@@ -238,10 +239,10 @@ void Server::processClientRequests(int client_socket, const vector<unsigned char
                         break;
                     }
                     cout << "Received ADD request." << endl;
-                    addMessage(client_socket, postLoginSessionKey, receivedPacket);
+                    addMessage(client_socket, sessionKey, receivedPacket);
                     break;
                 case T_LOGOUT:
-                    if(postLoginSessionKey.empty()){
+                    if(sessionKey.empty()){
                         cout << "Cannot logout when user is not logged in." << endl;
                         cout << "Closing connection..." << endl;
                         close(client_socket);
@@ -249,7 +250,7 @@ void Server::processClientRequests(int client_socket, const vector<unsigned char
                         break;
                     }
                     cout << "User logged out." << endl;
-                    postLoginSessionKey.clear();
+                    sessionKey.clear();
                     break;
                 default:
                     cout << "Invalid packet type received." << endl;
@@ -263,29 +264,11 @@ void Server::processClientRequests(int client_socket, const vector<unsigned char
 
     }
     catch(const exception& ex){
-        cerr << "Error in processClientRequests(): " << ex.what() << endl;
+        if (strcmp(ex.what(), "Connection closed by peer") != 0) {
+            cerr << "Error in processClientRequests(): " << ex.what() << endl;
+        }
     }
 
-    
-    
-    char buffer[BUFFER_SIZE];
-    int bytes_read;
-
-    while ((bytes_read = read(client_socket, buffer, BUFFER_SIZE)) > 0) {
-        buffer[bytes_read] = '\0';
-
-        // Step 3: Decrypt the incoming message using the sessionKey
-        vector<unsigned char> ciphertext(buffer, buffer + bytes_read);
-        string decryptedMessage = decryptMessage(ciphertext, sessionKey);
-
-        // Process the decrypted message (e.g., handle commands like LIST, GET, ADD)
-        // TO DO: Implement the logic to handle different client requests
-
-        // Example: Echo the message back to the client (encrypted)
-        string response = "Message received: " + decryptedMessage;
-        vector<unsigned char> encryptedResponse = encryptMessage(response, sessionKey);
-        send(client_socket, encryptedResponse.data(), encryptedResponse.size(), 0);
-    }
 }
 
 void Server::registerUser(int client_socket, const vector<unsigned char>& sessionKey, GeneralPacket receivedPacket) {
@@ -374,7 +357,7 @@ void Server::registerUser(int client_socket, const vector<unsigned char>& sessio
     // receivedPacket.send(client_socket);
 }
 
-void Server::loginUser(int client_socket, const vector<unsigned char>& sessionKey, vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket) {
+void Server::loginUser(int client_socket, const vector<unsigned char>& tempKey, vector<unsigned char>& sessionKey, GeneralPacket receivedPacket) {
     
     try{
 
@@ -402,19 +385,17 @@ void Server::loginUser(int client_socket, const vector<unsigned char>& sessionKe
 
             GeneralPacket responsePacket(nonce, T_OK, payload);
             // Send securely to the server
-            responsePacket.send(client_socket, sessionKey);
+            responsePacket.send(client_socket, tempKey);
 
-            // Begin a new instance of the DH key exchange
-            DHWrapper dhWrapper(1024);
-            postLoginSessionKey = dhWrapper.serverKeyExchange(client_socket, sessionKey, false, 16);
-
+            // Saving the temporary key as the session key
+            sessionKey = tempKey;
         }
         else{
             cout << "User login failed." << endl;
 
             GeneralPacket responsePacket(nonce, T_KO, payload);
             // Send securely to the server
-            responsePacket.send(client_socket, sessionKey);
+            responsePacket.send(client_socket, tempKey);
         }
 
     }

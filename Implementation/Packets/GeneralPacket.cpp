@@ -1,6 +1,5 @@
 #include "GeneralPacket.h"
 #include <stdexcept>
-#include <unistd.h> // for close
 
 #include "../Utility/Cryptography/AESGCMWrapper.h"
 

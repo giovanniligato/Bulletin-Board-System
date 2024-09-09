@@ -15,7 +15,6 @@
 using namespace std;
 
 #define DEFAULT_PORT 3030
-#define BUFFER_SIZE 1024
 #define SERVER_ADDRESS "127.0.0.1" // Localhost
 
 
@@ -31,26 +30,28 @@ private:
     int sock;
     struct sockaddr_in serv_addr;
 
-    vector<unsigned char> sessionKey;
-    vector<unsigned char> postLoginSessionKey;
-
-    string loggedInNickname;
-
-
-    char buffer[BUFFER_SIZE] = {0};
     bool isLoggedIn = false;
+    string loggedInNickname;
+    
+    // Session key used for the secure session
+    vector<unsigned char> sessionKey;
 
     void connectToServer();
     void closeConnection();
-    void registrationPhase();
+
+    void preLoginMenu();
+
     void registerUser();
     string getPassword();
     void login();
-    void logout();
+
     void postLoginMenu();
+
     void listMessages();
     void getMessage();
     void addMessage();
+    void logout();
+    
 };
 
 Client::Client(const string& serverAddress, int port) : port(port) {
@@ -66,6 +67,7 @@ Client::Client(const string& serverAddress, int port) : port(port) {
     if (inet_pton(AF_INET, serverAddress.c_str(), &serv_addr.sin_addr) <= 0) {
         throw runtime_error("Invalid address or Address not supported");
     }
+    
 }
 
 Client::~Client() {
@@ -81,22 +83,6 @@ void Client::connectToServer() {
 
     // Basic connection established.
 
-    // Now there is the need to implement the "secure connection".
-    try{
-        // Generate a random 16 byte ephemeral key, used for just for authentication purposes
-        vector<unsigned char> authentication_key =  generateRandomBytes(16);
-
-        // Diffie-Hellman key exchange
-        DHWrapper dhWrapper(1024);
-        // As we are using AES128-GCM for symmetric encryption, we need a 128-bit key (16 bytes)
-        sessionKey = dhWrapper.clientKeyExchange(sock, authentication_key, true, 16);
-
-    }
-    catch (const exception& ex) {
-        cerr << "Error in connectToServer(): " << ex.what() << endl;
-        exit(-1);
-    }
-
 }
 
 void Client::closeConnection() {
@@ -104,19 +90,27 @@ void Client::closeConnection() {
     cout << "Connection closed." << endl;
 }
 
-void Client::registrationPhase() {
+void Client::preLoginMenu() {
     while (!isLoggedIn) {
-        cout << "\n--- Registration Phase ---" << endl;
+        cout << "\n--- Login Menu ---" << endl;
         cout << "1. Register" << endl;
         cout << "2. Login" << endl;
         cout << "3. Exit" << endl;
         cout << "Choose an option: ";
         
-        int choice;
-        cin >> choice;
-        cin.ignore(); // Clear the input buffer
+        string choice;
+        getline(cin, choice);
 
-        switch (choice) {
+        int choiceInt;
+        try{
+            choiceInt = stoi(choice);
+        }
+        catch (const exception& ex) {
+            choiceInt = -1;
+        }
+
+        cout << endl;
+        switch (choiceInt) {
             case 1:
                 registerUser();
                 break;
@@ -159,6 +153,13 @@ string Client::getPassword() {
 void Client::registerUser() {
 
     try {
+        
+        // Starting the "secure connection" for the registration
+
+        // Diffie-Hellman key exchange
+        DHWrapper dhWrapper(1024);
+        // As we are using AES128-GCM for symmetric encryption, we need a 128-bit key (16 bytes)
+        vector<unsigned char> temporaryKey = dhWrapper.clientKeyExchange(sock, 16);
 
         string email, nickname, password;
         cout << "Enter email: ";
@@ -183,10 +184,10 @@ void Client::registerUser() {
         // Construct the packet
         GeneralPacket registrationPacket(nonce, T_REGISTRATION, payload);
         // Send securely to the server
-        registrationPacket.send(sock, sessionKey);
+        registrationPacket.send(sock, temporaryKey);
 
         // Receive the response from the server
-        GeneralPacket responsePacket = GeneralPacket::receive(sock, sessionKey);
+        GeneralPacket responsePacket = GeneralPacket::receive(sock, temporaryKey);
         if(responsePacket.getAAD() != nonce) {
             cout << "Nonce mismatch." << endl;
             exit(-1);
@@ -212,10 +213,10 @@ void Client::registerUser() {
             registrationPacket.setPayload(payload);
 
             // Send securely to the server
-            registrationPacket.send(sock, sessionKey);
+            registrationPacket.send(sock, temporaryKey);
 
             // Receive the response from the server
-            responsePacket = GeneralPacket::receive(sock, sessionKey);
+            responsePacket = GeneralPacket::receive(sock, temporaryKey);
 
             if(responsePacket.getAAD() != nonce) {
                 cout << "Nonce mismatch." << endl;
@@ -246,19 +247,6 @@ void Client::registerUser() {
         }
 
 
-
-
-        string registerMessage = "REGISTER " + nickname + " " + password;
-        send(sock, registerMessage.c_str(), registerMessage.length(), 0);
-
-        // Receive the response from the server
-        int bytes_read = read(sock, buffer, BUFFER_SIZE);
-        if (bytes_read > 0) {
-            buffer[bytes_read] = '\0';
-            string response(buffer);
-            cout << "Registration response: " << response << endl;
-        }
-
     }
     catch (const exception& ex) {
         cerr << "Error in register(): " << ex.what() << endl;
@@ -271,6 +259,14 @@ void Client::registerUser() {
 void Client::login() {
 
     try {
+
+        // Starting the "secure connection" for the login
+
+        // Diffie-Hellman key exchange
+        DHWrapper dhWrapper(1024);
+        // As we are using AES128-GCM for symmetric encryption, we need a 128-bit key (16 bytes)
+        vector<unsigned char> temporaryKey = dhWrapper.clientKeyExchange(sock, 16);
+
         string nickname, password;
         cout << "Enter nickname: ";
         getline(cin, nickname);
@@ -290,10 +286,10 @@ void Client::login() {
         // Construct the packet
         GeneralPacket loginPacket(nonce, T_LOGIN, payload);
         // Send securely to the server
-        loginPacket.send(sock, sessionKey);
+        loginPacket.send(sock, temporaryKey);
 
         // Receive the response from the server
-        GeneralPacket responsePacket = GeneralPacket::receive(sock, sessionKey);
+        GeneralPacket responsePacket = GeneralPacket::receive(sock, temporaryKey);
         if(responsePacket.getAAD() != nonce) {
             cout << "Nonce mismatch." << endl;
             exit(-1);
@@ -304,13 +300,10 @@ void Client::login() {
             loggedInNickname = nickname;
             cout << "Login successful." << endl;
 
-            // Here there's the need to start another instance of
-            // the DH key exchange to generate a new post-login session key
-            // because the requirements state that "Upon successful login, 
-            // a secure session is established and maintained until the 
-            // user logs out."
-            DHWrapper dhWrapper(1024);
-            postLoginSessionKey = dhWrapper.clientKeyExchange(sock, sessionKey, false, 16);
+            // Here we can establish a secure connection with the server
+            // saving the temporary key in the session key, in order to
+            // be used for the following operations 
+            sessionKey = temporaryKey;
 
             postLoginMenu();
             return;
@@ -332,37 +325,30 @@ void Client::login() {
     
 }
 
-void Client::logout() {
-    
-    vector<unsigned char> nonce;
-    vector<unsigned char> payload;
 
-    // Construct the packet
-    GeneralPacket logoutPacket(nonce, T_LOGOUT, payload);
-
-    // Send securely to the server
-    logoutPacket.send(sock, postLoginSessionKey);
-
-    isLoggedIn = false;
-    postLoginSessionKey.clear();
-    loggedInNickname.clear();
-    cout << "Logged out successfully." << endl;
-}
 
 void Client::postLoginMenu() {
     while (isLoggedIn) {
-        cout << "\n--- BBS Menu ---" << endl;
+        cout << "\n---- BBS Menu ----" << endl;
         cout << "1. List Messages" << endl;
         cout << "2. Get Message" << endl;
         cout << "3. Add Message" << endl;
         cout << "4. Logout" << endl;
         cout << "Choose an option: ";
         
-        int choice;
-        cin >> choice;
-        cin.ignore(); // Clear the input buffer
+        string choice;
+        getline(cin, choice);
 
-        switch (choice) {
+        int choiceInt;
+        try{
+            choiceInt = stoi(choice);
+        }
+        catch (const exception& ex) {
+            choiceInt = -1;
+        }
+
+        cout << endl;
+        switch (choiceInt) {
             case 1: {
                 listMessages();
                 break;
@@ -404,10 +390,10 @@ void Client::listMessages() {
     GeneralPacket listMessagesPacket(nonce, T_LIST, payload);
 
     // Send securely to the server
-    listMessagesPacket.send(sock, postLoginSessionKey);
+    listMessagesPacket.send(sock, sessionKey);
 
     // Receive the response from the server
-    GeneralPacket responsePacket = GeneralPacket::receive(sock, postLoginSessionKey);
+    GeneralPacket responsePacket = GeneralPacket::receive(sock, sessionKey);
     if(responsePacket.getAAD() != nonce) {
         cout << "Nonce mismatch." << endl;
         exit(-1);
@@ -491,10 +477,10 @@ void Client::getMessage() {
     GeneralPacket getMessagePacket(nonce, T_GET, payload);
 
     // Send securely to the server
-    getMessagePacket.send(sock, postLoginSessionKey);
+    getMessagePacket.send(sock, sessionKey);
 
     // Receive the response from the server
-    GeneralPacket responsePacket = GeneralPacket::receive(sock, postLoginSessionKey);
+    GeneralPacket responsePacket = GeneralPacket::receive(sock, sessionKey);
     if(responsePacket.getAAD() != nonce) {
         cout << "Nonce mismatch." << endl;
         exit(-1);
@@ -558,10 +544,10 @@ void Client::addMessage() {
     // Construct the packet
     GeneralPacket addMessagePacket(nonce, T_ADD, payload);
     // Send securely to the server
-    addMessagePacket.send(sock, postLoginSessionKey);
+    addMessagePacket.send(sock, sessionKey);
 
     // Receive the response from the server
-    GeneralPacket responsePacket = GeneralPacket::receive(sock, postLoginSessionKey);
+    GeneralPacket responsePacket = GeneralPacket::receive(sock, sessionKey);
 
     // First 16 bytes of the aad are the client nonce
     // The next 16 bytes are the server nonce
@@ -597,10 +583,10 @@ void Client::addMessage() {
         addMessagePacket.setPayload(payload);
 
         // Send securely to the server
-        addMessagePacket.send(sock, postLoginSessionKey);
+        addMessagePacket.send(sock, sessionKey);
 
         // Receive the response from the server
-        responsePacket = GeneralPacket::receive(sock, postLoginSessionKey);
+        responsePacket = GeneralPacket::receive(sock, sessionKey);
         cout <<"Received response packet." << endl;
         if(responsePacket.getAAD() != aad) {
             cout << "Nonces mismatch." << endl;
@@ -632,9 +618,29 @@ void Client::addMessage() {
 
 }
 
+void Client::logout() {
+    
+    vector<unsigned char> nonce;
+    vector<unsigned char> payload;
+
+    // Construct the packet
+    GeneralPacket logoutPacket(nonce, T_LOGOUT, payload);
+
+    // Send securely to the server
+    logoutPacket.send(sock, sessionKey);
+
+    isLoggedIn = false;
+    sessionKey.clear();
+    loggedInNickname.clear();
+    cout << "Logged out successfully." << endl;
+}
+
 void Client::run() {
+    // Establish connection with the server
     connectToServer();
-    registrationPhase();
+
+    // Show the pre-login menu
+    preLoginMenu();
 }
 
 int main(int argc, char *argv[]) {
