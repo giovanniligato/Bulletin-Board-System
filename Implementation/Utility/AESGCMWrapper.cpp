@@ -1,6 +1,7 @@
 #include "AESGCMWrapper.h"
-#include <openssl/err.h>
 
+#include <openssl/err.h>
+#include "Randomness.h"
 
 void AESGCMWrapper::encrypt(const vector<unsigned char>& key, 
                             const vector<unsigned char>& plaintext, 
@@ -14,9 +15,7 @@ void AESGCMWrapper::encrypt(const vector<unsigned char>& key,
 
     // Allocate and generate IV
     iv.resize(IV_SIZE);
-    if (1 != RAND_bytes(iv.data(), IV_SIZE)) {
-        throw runtime_error("Failed to generate IV.");
-    }
+    iv = generateRandomBytes(IV_SIZE);
 
     // Allocate tag
     tag.resize(TAG_SIZE);

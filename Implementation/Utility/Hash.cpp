@@ -1,4 +1,5 @@
 #include "Hash.h"
+
 #include <openssl/evp.h>
 #include <sstream>
 #include <iomanip>
@@ -19,7 +20,7 @@ vector<unsigned char> Hash::computeSHA256(const vector<unsigned char>& data) {
     }
 
     // Process the data in chunks
-    const size_t CHUNK_SIZE = 4096;  // 4 KB chunk size (can be adjusted)
+    const size_t CHUNK_SIZE = 4096;  // 4 KB chunk size
     size_t processed = 0;
     while (processed < data.size()) {
         size_t chunkSize = min(CHUNK_SIZE, data.size() - processed);

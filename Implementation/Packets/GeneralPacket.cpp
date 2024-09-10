@@ -1,7 +1,7 @@
 #include "GeneralPacket.h"
-#include <stdexcept>
 
-#include "../Utility/Cryptography/AESGCMWrapper.h"
+#include <arpa/inet.h>
+#include "../Utility/AESGCMWrapper.h"
 
 // Constructor
 GeneralPacket::GeneralPacket(const vector<unsigned char>& aad,
@@ -114,7 +114,6 @@ GeneralPacket GeneralPacket::receive(int socket, vector<unsigned char> key) {
         }
         total_received += bytes_received;
     }
-
 
     // Extract the ciphertext_size
     uint32_t ciphertext_size;

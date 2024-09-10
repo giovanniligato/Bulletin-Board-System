@@ -6,11 +6,9 @@
 #include <fstream>
 #include <filesystem>
 #include <stdexcept>
-#include <openssl/evp.h> // For cryptographic operations
-#include <openssl/rand.h> // For secure random number generation
 
-#include "../Utility/Cryptography/Randomness.h"
-#include "../Utility/Cryptography/Hash.h"
+#include "../Utility/Randomness.h"
+#include "../Utility/Hash.h"
 
 using namespace std;
 
@@ -20,8 +18,11 @@ public:
     User(const string& nickname, const string& password);
 
     bool checkExistence() const;
+    
     void saveUser() const;
+    
     bool checkPassword() const;
+
     vector<unsigned char> sendChallenge() const;
     void deleteChallenge() const;
 

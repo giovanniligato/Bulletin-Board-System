@@ -5,11 +5,11 @@
 #include <string>
 #include <termios.h>
 
-#include "../Utility/Cryptography/Randomness.h"
-#include "../Utility/Cryptography/RSAWrapper.h"
-#include "../Utility/Cryptography/AESGCMWrapper.h"
-#include "../Utility/Cryptography/DHWrapper.h"
-#include "../Utility/Cryptography/Hash.h"
+#include "../Utility/Randomness.h"
+#include "../Utility/RSAWrapper.h"
+#include "../Utility/AESGCMWrapper.h"
+#include "../Utility/DHWrapper.h"
+#include "../Utility/Hash.h"
 #include "../Packets/GeneralPacket.h"
 
 using namespace std;
@@ -37,6 +37,7 @@ private:
     vector<unsigned char> sessionKey;
 
     void connectToServer();
+    vector<unsigned char> secureConnection();
     void closeConnection();
 
     void preLoginMenu();
@@ -85,12 +86,35 @@ void Client::connectToServer() {
 
 }
 
+vector<unsigned char> Client::secureConnection() {
+
+    vector<unsigned char> key;
+    
+    try {
+
+        // Diffie-Hellman key exchange
+        DHWrapper dhWrapper(1024);
+        
+        // As we are using AES128-GCM for symmetric encryption, we need a 128-bit key (16 bytes)
+        key = dhWrapper.clientKeyExchange(sock, 16);
+    
+    }
+    catch (const exception& ex) {
+        cerr << "Error in secureConnection(): " << ex.what() << endl;
+        exit(-1);
+    }
+
+    return key;
+}
+
+
 void Client::closeConnection() {
     close(sock);
     cout << "Connection closed." << endl;
 }
 
 void Client::preLoginMenu() {
+
     while (!isLoggedIn) {
         cout << "\n--- Login Menu ---" << endl;
         cout << "1. Register" << endl;
@@ -125,6 +149,7 @@ void Client::preLoginMenu() {
                 break;
         }
     }
+
 }
 
 string Client::getPassword() {
@@ -142,10 +167,15 @@ string Client::getPassword() {
     cout << "Enter password: ";
     getline(cin, password);
 
+    // If password is longer than 255 characters, truncate it
+    if (password.length() > 255) {
+        password = password.substr(0, 255);
+    }
+
     // Restore old terminal attributes
     tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
 
-    cout << endl;  // Move to the next line
+    cout << endl;
 
     return password;
 }
@@ -155,17 +185,25 @@ void Client::registerUser() {
     try {
         
         // Starting the "secure connection" for the registration
-
-        // Diffie-Hellman key exchange
-        DHWrapper dhWrapper(1024);
-        // As we are using AES128-GCM for symmetric encryption, we need a 128-bit key (16 bytes)
-        vector<unsigned char> temporaryKey = dhWrapper.clientKeyExchange(sock, 16);
+        vector<unsigned char> temporaryKey = secureConnection();
 
         string email, nickname, password;
         cout << "Enter email: ";
         getline(cin, email);
+
+        // If email is longer than 255 characters, truncate it
+        if (email.length() > 255) {
+            email = email.substr(0, 255);
+        }
+
         cout << "Enter nickname: ";
         getline(cin, nickname);
+        
+        // If nickname is longer than 255 characters, truncate it
+        if (nickname.length() > 255) {
+            nickname = nickname.substr(0, 255);
+        }
+        
         password = getPassword();
 
         // Send registration credentials to the server
@@ -173,7 +211,9 @@ void Client::registerUser() {
         vector<unsigned char> payload;
 
         // Insert the email, nickname, and password into the payload
-        // 1 Byte for the email length, email, 1 Byte for the nickname length, nickname, 1 Byte for the password length, password
+        // 1 Byte for the email length, email, 
+        // 1 Byte for the nickname length, nickname, 
+        // 1 Byte for the password length, password
         payload.push_back(email.length());
         payload.insert(payload.end(), email.begin(), email.end());
         payload.push_back(nickname.length());
@@ -194,7 +234,7 @@ void Client::registerUser() {
         }
 
         if(responsePacket.getType() == T_OK) {
-            cout << "Challenge sent to your email." << endl;
+            cout << "Challenge sent to your email (Client/Storage/Emails/" << email << ".txt)." << endl;
             cout << "Please check your email and enter the challenge code: ";
             uint32_t challenge;
             cin >> challenge;
@@ -246,14 +286,12 @@ void Client::registerUser() {
             exit(-1);
         }
 
-
     }
     catch (const exception& ex) {
-        cerr << "Error in register(): " << ex.what() << endl;
+        cerr << "Error in registerUser(): " << ex.what() << endl;
         exit(-1);
     }
 
-    
 }
 
 void Client::login() {
@@ -261,15 +299,17 @@ void Client::login() {
     try {
 
         // Starting the "secure connection" for the login
-
-        // Diffie-Hellman key exchange
-        DHWrapper dhWrapper(1024);
-        // As we are using AES128-GCM for symmetric encryption, we need a 128-bit key (16 bytes)
-        vector<unsigned char> temporaryKey = dhWrapper.clientKeyExchange(sock, 16);
+        vector<unsigned char> temporaryKey = secureConnection();
 
         string nickname, password;
         cout << "Enter nickname: ";
         getline(cin, nickname);
+
+        // If nickname is longer than 255 characters, truncate it
+        if (nickname.length() > 255) {
+            nickname = nickname.substr(0, 255);
+        }
+
         password = getPassword();
 
         // Send login credentials to the server
@@ -277,7 +317,8 @@ void Client::login() {
         vector<unsigned char> payload;
 
         // Insert the nickname and password into the payload
-        // 1 Byte for the nickname length, nickname, 1 Byte for the password length, password
+        // 1 Byte for the nickname length, nickname, 
+        // 1 Byte for the password length, password
         payload.push_back(nickname.length());
         payload.insert(payload.end(), nickname.begin(), nickname.end());
         payload.push_back(password.length());
@@ -300,12 +341,14 @@ void Client::login() {
             loggedInNickname = nickname;
             cout << "Login successful." << endl;
 
-            // Here we can establish a secure connection with the server
-            // saving the temporary key in the session key, in order to
-            // be used for the following operations 
+            // Here we can establish a secure session
+            // with the server, saving the temporary key
+            // intp the session key, in order to be used
+            // for the following operations 
             sessionKey = temporaryKey;
 
             postLoginMenu();
+
             return;
         }
         else if(responsePacket.getType() == T_KO) {
@@ -325,9 +368,8 @@ void Client::login() {
     
 }
 
-
-
 void Client::postLoginMenu() {
+    
     while (isLoggedIn) {
         cout << "\n---- BBS Menu ----" << endl;
         cout << "1. List Messages" << endl;
@@ -369,233 +411,277 @@ void Client::postLoginMenu() {
                 break;
         }
     }
+
 }
 
 void Client::listMessages() {
-    uint32_t n;
-    cout << "Enter number of latest messages to list (if available): ";
-    cin >> n;
-    cin.ignore();
 
-    vector<unsigned char> nonce = generateRandomBytes(16);
-    vector<unsigned char> payload;
-    
-    // Adding n to the payload
-    payload.push_back((n >> 24) & 0xFF);
-    payload.push_back((n >> 16) & 0xFF);
-    payload.push_back((n >> 8) & 0xFF);
-    payload.push_back(n & 0xFF);
+    try{
 
-    // Construct the packet
-    GeneralPacket listMessagesPacket(nonce, T_LIST, payload);
+        uint32_t n;
+        cout << "Enter number of latest messages to list (if available): ";
+        cin >> n;
+        cin.ignore();
 
-    // Send securely to the server
-    listMessagesPacket.send(sock, sessionKey);
+        vector<unsigned char> nonce = generateRandomBytes(16);
+        vector<unsigned char> payload;
+        
+        // Adding n to the payload
+        payload.push_back((n >> 24) & 0xFF);
+        payload.push_back((n >> 16) & 0xFF);
+        payload.push_back((n >> 8) & 0xFF);
+        payload.push_back(n & 0xFF);
 
-    // Receive the response from the server
-    GeneralPacket responsePacket = GeneralPacket::receive(sock, sessionKey);
-    if(responsePacket.getAAD() != nonce) {
-        cout << "Nonce mismatch." << endl;
-        exit(-1);
-    }
+        // Construct the packet
+        GeneralPacket listMessagesPacket(nonce, T_LIST, payload);
 
-    if(responsePacket.getType() == T_OK) {
-        // Inside the payload there are:
-        // 4 Bytes indicating the actual number of messages
-        // (because the server may not have n messages to list)
-        // Then, for each message, there are:
-        // 4 Bytes for the message ID
-        // 2 Bytes for the title length, title, 
-        // 2 Bytes for the author length, author
-        // 2 Bytes for the body length, body
-        vector<unsigned char> listMessagesPayload = responsePacket.getPayload();
-        uint32_t actualNumberOfMessages = (listMessagesPayload[0] << 24) | (listMessagesPayload[1] << 16) | (listMessagesPayload[2] << 8) | listMessagesPayload[3];
-        // Remove the actual number of messages from the payload
-        listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + 4);
+        // Send securely to the server
+        listMessagesPacket.send(sock, sessionKey);
 
-        if(actualNumberOfMessages == 0) {
-            cout << "No messages to list." << endl;
+        // Receive the response from the server
+        GeneralPacket responsePacket = GeneralPacket::receive(sock, sessionKey);
+        if(responsePacket.getAAD() != nonce) {
+            cout << "Nonce mismatch." << endl;
+            exit(-1);
+        }
+
+        if(responsePacket.getType() == T_OK) {
+            // Inside the payload there are:
+            // 4 Bytes indicating the actual number of messages
+            // (because the server may not have n messages to list)
+            // Then, for each message, there are:
+            // 4 Bytes for the message ID
+            // 2 Bytes for the title length, title, 
+            // 1 Byte for the author length, author
+            // 2 Bytes for the body length, body
+            vector<unsigned char> listMessagesPayload = responsePacket.getPayload();
+
+            uint32_t actualNumberOfMessages = (listMessagesPayload[0] << 24) | (listMessagesPayload[1] << 16) | (listMessagesPayload[2] << 8) | listMessagesPayload[3];
+            // Remove the actual number of messages from the payload
+            listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + 4);
+
+            if(actualNumberOfMessages == 0) {
+                cout << "No messages to list." << endl;
+                return;
+            }
+
+            cout << actualNumberOfMessages << " messages found." << endl << endl;
+            for (uint32_t i = 0; i < actualNumberOfMessages; i++) {
+                uint32_t mid = (listMessagesPayload[0] << 24) | (listMessagesPayload[1] << 16) | (listMessagesPayload[2] << 8) | listMessagesPayload[3];
+                listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + 4);
+                uint16_t titleLength = (listMessagesPayload[0] << 8) | listMessagesPayload[1];
+                listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + 2);
+                string title(listMessagesPayload.begin(), listMessagesPayload.begin() + titleLength);
+                listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + titleLength);
+                uint8_t authorLength = listMessagesPayload[0];
+                listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + 1);
+                string author(listMessagesPayload.begin(), listMessagesPayload.begin() + authorLength);
+                listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + authorLength);
+                uint16_t bodyLength = (listMessagesPayload[0] << 8) | listMessagesPayload[1];
+                listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + 2);
+                string body(listMessagesPayload.begin(), listMessagesPayload.begin() + bodyLength);
+                listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + bodyLength);
+
+                cout << "Message ID: " << mid << endl;
+                cout << "Title: " << title << endl;
+                cout << "Author: " << author << endl;
+                cout << "Body: " << body << endl;
+                cout << endl;
+            }
+
+            cout << "End of messages." << endl;
+
+            return;
+        
+        }
+        else if(responsePacket.getType() == T_KO) {
+            cout << "Impossible to list the messages." << endl;
             return;
         }
-
-        cout << endl << actualNumberOfMessages << " Messages found:" << endl << endl;
-        for (uint32_t i = 0; i < actualNumberOfMessages; i++) {
-            uint32_t mid = (listMessagesPayload[0] << 24) | (listMessagesPayload[1] << 16) | (listMessagesPayload[2] << 8) | listMessagesPayload[3];
-            listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + 4);
-            uint16_t titleLength = (listMessagesPayload[0] << 8) | listMessagesPayload[1];
-            listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + 2);
-            string title(listMessagesPayload.begin(), listMessagesPayload.begin() + titleLength);
-            listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + titleLength);
-            uint16_t authorLength = (listMessagesPayload[0] << 8) | listMessagesPayload[1];
-            listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + 2);
-            string author(listMessagesPayload.begin(), listMessagesPayload.begin() + authorLength);
-            listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + authorLength);
-            uint16_t bodyLength = (listMessagesPayload[0] << 8) | listMessagesPayload[1];
-            listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + 2);
-            string body(listMessagesPayload.begin(), listMessagesPayload.begin() + bodyLength);
-            listMessagesPayload.erase(listMessagesPayload.begin(), listMessagesPayload.begin() + bodyLength);
-
-            cout << "Message ID: " << mid << endl;
-            cout << "Title: " << title << endl;
-            cout << "Author: " << author << endl;
-            cout << "Body: " << body << endl;
-            cout << endl;
+        else {
+            cout << "Not expected response type." << endl;
+            exit(-1);
         }
 
-        cout << "End of messages." << endl;
-
-        return;
-    
     }
-    else if(responsePacket.getType() == T_KO) {
-        cout << "Impossible to list the messages." << endl;
-        return;
-    }
-    else {
-        cout << "Not expected response type." << endl;
+    catch (const exception& ex) {
+        cerr << "Error in listMessages(): " << ex.what() << endl;
         exit(-1);
     }
 
 }
 
 void Client::getMessage() {
-    uint32_t mid;
-    cout << "Enter message ID to get: ";
-    cin >> mid;
-    cin.ignore();
-    
-    vector<unsigned char> nonce = generateRandomBytes(16);
-    vector<unsigned char> payload;
 
-    // Adding mid to the payload
-    payload.push_back((mid >> 24) & 0xFF);
-    payload.push_back((mid >> 16) & 0xFF);
-    payload.push_back((mid >> 8) & 0xFF);
-    payload.push_back(mid & 0xFF);
+    try{
 
-    // Construct the packet
-    GeneralPacket getMessagePacket(nonce, T_GET, payload);
+        uint32_t mid;
+        cout << "Enter message ID to get: ";
+        cin >> mid;
+        cin.ignore();
+        
+        vector<unsigned char> nonce = generateRandomBytes(16);
+        vector<unsigned char> payload;
 
-    // Send securely to the server
-    getMessagePacket.send(sock, sessionKey);
+        // Adding mid to the payload
+        payload.push_back((mid >> 24) & 0xFF);
+        payload.push_back((mid >> 16) & 0xFF);
+        payload.push_back((mid >> 8) & 0xFF);
+        payload.push_back(mid & 0xFF);
 
-    // Receive the response from the server
-    GeneralPacket responsePacket = GeneralPacket::receive(sock, sessionKey);
-    if(responsePacket.getAAD() != nonce) {
-        cout << "Nonce mismatch." << endl;
-        exit(-1);
+        // Construct the packet
+        GeneralPacket getMessagePacket(nonce, T_GET, payload);
+
+        // Send securely to the server
+        getMessagePacket.send(sock, sessionKey);
+
+        // Receive the response from the server
+        GeneralPacket responsePacket = GeneralPacket::receive(sock, sessionKey);
+        if(responsePacket.getAAD() != nonce) {
+            cout << "Nonce mismatch." << endl;
+            exit(-1);
+        }
+
+        cout << endl;
+        if(responsePacket.getType() == T_OK) {
+            // Inside the payload there are:
+            // 4 Bytes for the message ID
+            // 2 Bytes for the title length, title, 
+            // 1 Byte for the author length, author
+            // 2 Bytes for the body length, body
+            vector<unsigned char> getMessagePayload = responsePacket.getPayload();
+            uint32_t mid = (getMessagePayload[0] << 24) | (getMessagePayload[1] << 16) | (getMessagePayload[2] << 8) | getMessagePayload[3];
+            getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + 4);
+            uint16_t titleLength = (getMessagePayload[0] << 8) | getMessagePayload[1];
+            getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + 2);
+            string title(getMessagePayload.begin(), getMessagePayload.begin() + titleLength);
+            getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + titleLength);
+            uint8_t authorLength = getMessagePayload[0];
+            getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + 1);
+            string author(getMessagePayload.begin(), getMessagePayload.begin() + authorLength);
+            getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + authorLength);
+            uint16_t bodyLength = (getMessagePayload[0] << 8) | getMessagePayload[1];
+            getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + 2);
+            string body(getMessagePayload.begin(), getMessagePayload.begin() + bodyLength);
+            getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + bodyLength);
+
+            cout << "Message ID: " << mid << endl;
+            cout << "Title: " << title << endl;
+            cout << "Author: " << author << endl;
+            cout << "Body: " << body << endl;
+
+            return;
+        }
+        else if(responsePacket.getType() == T_KO) {
+            cout << "Impossible to get the message." << endl;
+            return;
+        }
+        else {
+            cout << "Not expected response type." << endl;
+            exit(-1);
+        }
+
     }
-
-    cout << endl;
-    if(responsePacket.getType() == T_OK) {
-        // Inside the payload there are:
-        // 4 Bytes for the message ID
-        // 2 Bytes for the title length, title, 
-        // 2 Bytes for the author length, author
-        // 2 Bytes for the body length, body
-        vector<unsigned char> getMessagePayload = responsePacket.getPayload();
-        uint32_t mid = (getMessagePayload[0] << 24) | (getMessagePayload[1] << 16) | (getMessagePayload[2] << 8) | getMessagePayload[3];
-        getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + 4);
-        uint16_t titleLength = (getMessagePayload[0] << 8) | getMessagePayload[1];
-        getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + 2);
-        string title(getMessagePayload.begin(), getMessagePayload.begin() + titleLength);
-        getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + titleLength);
-        uint16_t authorLength = (getMessagePayload[0] << 8) | getMessagePayload[1];
-        getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + 2);
-        string author(getMessagePayload.begin(), getMessagePayload.begin() + authorLength);
-        getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + authorLength);
-        uint16_t bodyLength = (getMessagePayload[0] << 8) | getMessagePayload[1];
-        getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + 2);
-        string body(getMessagePayload.begin(), getMessagePayload.begin() + bodyLength);
-        getMessagePayload.erase(getMessagePayload.begin(), getMessagePayload.begin() + bodyLength);
-
-        cout << "Message ID: " << mid << endl;
-        cout << "Title: " << title << endl;
-        cout << "Author: " << author << endl;
-        cout << "Body: " << body << endl;
-
-        return;
-    
-    }
-    else if(responsePacket.getType() == T_KO) {
-        cout << "Impossible to get the message." << endl;
-        return;
-    }
-    else {
-        cout << "Not expected response type." << endl;
+    catch (const exception& ex) {
+        cerr << "Error in getMessage(): " << ex.what() << endl;
         exit(-1);
     }
     
 }
 
 void Client::addMessage() {
-    string title, body;
-    cout << "Enter title: ";
-    getline(cin, title);
-    cout << "Enter body: ";
-    getline(cin, body);
 
-    // Ask the Server the possibility to add a message
-    // In this way it will send back a its nonce to be
-    // used in next packets
-    vector<unsigned char> nonce = generateRandomBytes(16);
-    vector<unsigned char> payload;
+    try{
 
-    // Construct the packet
-    GeneralPacket addMessagePacket(nonce, T_ADD, payload);
-    // Send securely to the server
-    addMessagePacket.send(sock, sessionKey);
-
-    // Receive the response from the server
-    GeneralPacket responsePacket = GeneralPacket::receive(sock, sessionKey);
-
-    // First 16 bytes of the aad are the client nonce
-    // The next 16 bytes are the server nonce
-    vector<unsigned char> receivedClientNonce(responsePacket.getAAD().begin(), responsePacket.getAAD().begin() + 16);
-    vector<unsigned char> serverNonce(responsePacket.getAAD().begin() + 16, responsePacket.getAAD().end());
-    if(receivedClientNonce != nonce) {
-        cout << "Nonce mismatch." << endl;
-        exit(-1);
-    }
-
-    if(responsePacket.getType() == T_OK) {
-        // The server nonce is received, now we can send the message to be added
-
-        // AAD is composed by the client nonce and the server nonce
-        vector<unsigned char> aad(nonce);
-        aad.insert(aad.end(), serverNonce.begin(), serverNonce.end());
-
-        payload.clear();
-        // Pyaload is composed by the title, the author and the body
-        // 2 Byte for the title length, title, 2 Byte for the author length, author, 2 Byte for the body length, body
-        payload.push_back((title.length() >> 8) & 0xFF);
-        payload.push_back(title.length() & 0xFF);
-        payload.insert(payload.end(), title.begin(), title.end());
-        payload.push_back((loggedInNickname.length() >> 8) & 0xFF);
-        payload.push_back(loggedInNickname.length() & 0xFF);
-        payload.insert(payload.end(), loggedInNickname.begin(), loggedInNickname.end());
-        payload.push_back((body.length() >> 8) & 0xFF);
-        payload.push_back(body.length() & 0xFF);
-        payload.insert(payload.end(), body.begin(), body.end());
+        string title, body;
+        cout << "Enter title: ";
+        getline(cin, title);
         
-        // Construct the packet
-        addMessagePacket.setADD(aad);
-        addMessagePacket.setPayload(payload);
+        // If title is longer than 65535 characters, truncate it
+        if (title.length() > 65535) {
+            title = title.substr(0, 65535);
+        }
 
+        cout << "Enter body: ";
+        getline(cin, body);
+
+        // If body is longer than 65535 characters, truncate it
+        if (body.length() > 65535) {
+            body = body.substr(0, 65535);
+        }
+
+        // Ask the Server the possibility to add a 
+        // message. In this way it will send back 
+        // its nonce to be used in next packets
+        vector<unsigned char> nonce = generateRandomBytes(16);
+        vector<unsigned char> payload;
+
+        // Construct the packet
+        GeneralPacket addMessagePacket(nonce, T_ADD, payload);
         // Send securely to the server
         addMessagePacket.send(sock, sessionKey);
 
         // Receive the response from the server
-        responsePacket = GeneralPacket::receive(sock, sessionKey);
-        cout <<"Received response packet." << endl;
-        if(responsePacket.getAAD() != aad) {
-            cout << "Nonces mismatch." << endl;
+        GeneralPacket responsePacket = GeneralPacket::receive(sock, sessionKey);
+
+        // First 16 bytes of the aad are the client nonce
+        // The next 16 bytes are the server nonce
+        vector<unsigned char> receivedClientNonce(responsePacket.getAAD().begin(), responsePacket.getAAD().begin() + 16);
+        vector<unsigned char> serverNonce(responsePacket.getAAD().begin() + 16, responsePacket.getAAD().end());
+        if(receivedClientNonce != nonce) {
+            cout << "Nonce mismatch." << endl;
             exit(-1);
         }
 
         if(responsePacket.getType() == T_OK) {
-            cout << "Message added successfully." << endl;
-            return;
+            // The server nonce has been received, 
+            // now we can send the message to be added
+
+            // AAD is composed by the client nonce and the server nonce
+            vector<unsigned char> aad(nonce);
+            aad.insert(aad.end(), serverNonce.begin(), serverNonce.end());
+
+            payload.clear();
+            // Pyaload is composed by the title, the author and the body
+            // 2 Bytes for the title length, title, 
+            // 1 Byte for the author length, author, 
+            // 2 Bytes for the body length, body
+            payload.push_back((title.length() >> 8) & 0xFF);
+            payload.push_back(title.length() & 0xFF);
+            payload.insert(payload.end(), title.begin(), title.end());
+            payload.push_back(loggedInNickname.length());
+            payload.insert(payload.end(), loggedInNickname.begin(), loggedInNickname.end());
+            payload.push_back((body.length() >> 8) & 0xFF);
+            payload.push_back(body.length() & 0xFF);
+            payload.insert(payload.end(), body.begin(), body.end());
+            
+            // Construct the packet
+            addMessagePacket.setADD(aad);
+            addMessagePacket.setPayload(payload);
+
+            // Send securely to the server
+            addMessagePacket.send(sock, sessionKey);
+
+            // Receive the response from the server
+            responsePacket = GeneralPacket::receive(sock, sessionKey);
+            if(responsePacket.getAAD() != aad) {
+                cout << "Nonces mismatch." << endl;
+                exit(-1);
+            }
+
+            if(responsePacket.getType() == T_OK) {
+                cout << "Message added successfully." << endl;
+                return;
+            }
+            else if(responsePacket.getType() == T_KO) {
+                cout << "Impossible to add the message." << endl;
+                return;
+            }
+            else {
+                cout << "Not expected response type." << endl;
+                exit(-1);
+            }
+
         }
         else if(responsePacket.getType() == T_KO) {
             cout << "Impossible to add the message." << endl;
@@ -607,42 +693,48 @@ void Client::addMessage() {
         }
 
     }
-    else if(responsePacket.getType() == T_KO) {
-        cout << "Impossible to add the message." << endl;
-        return;
-    }
-    else {
-        cout << "Not expected response type." << endl;
+    catch (const exception& ex) {
+        cerr << "Error in addMessage(): " << ex.what() << endl;
         exit(-1);
     }
 
 }
 
 void Client::logout() {
-    
-    vector<unsigned char> nonce;
-    vector<unsigned char> payload;
 
-    // Construct the packet
-    GeneralPacket logoutPacket(nonce, T_LOGOUT, payload);
+    try{
+        vector<unsigned char> nonce;
+        vector<unsigned char> payload;
 
-    // Send securely to the server
-    logoutPacket.send(sock, sessionKey);
+        // Construct the packet
+        GeneralPacket logoutPacket(nonce, T_LOGOUT, payload);
 
-    isLoggedIn = false;
-    sessionKey.clear();
-    loggedInNickname.clear();
-    cout << "Logged out successfully." << endl;
+        // Send securely to the server
+        logoutPacket.send(sock, sessionKey);
+
+        isLoggedIn = false;
+        sessionKey.clear();
+        loggedInNickname.clear();
+
+        cout << "Logged out successfully." << endl;
+    }   
+    catch (const exception& ex) {
+        cerr << "Error in logout(): " << ex.what() << endl;
+        exit(-1);
+    }
+
 }
 
 void Client::run() {
-    // Establish connection with the server
+
+    // Establish basic connection with the server
     connectToServer();
 
     // Show the pre-login menu
     preLoginMenu();
 }
 
+// Main function
 int main(int argc, char *argv[]) {
 
     int PORT = DEFAULT_PORT;
@@ -654,8 +746,9 @@ int main(int argc, char *argv[]) {
     try {
         Client client(SERVER_ADDRESS, PORT);
         client.run();
-    } catch (const exception& ex) {
-        cerr << "Error: " << ex.what() << endl;
+    } 
+    catch (const exception& ex) {
+        cerr << "Error in main(): " << ex.what() << endl;
         return -1;
     }
 

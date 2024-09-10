@@ -5,7 +5,7 @@
 #include "RSAWrapper.h"
 #include "Randomness.h"
 #include "Hash.h"
-#include "../../Packets/StartPacket.h"
+#include "../Packets/StartPacket.h"
 
 // Constructor: Generate or load Diffie-Hellman parameters and keys
 DHWrapper::DHWrapper(int keyLength) : pkey(nullptr), peerKey(nullptr), keyLength(keyLength) {
@@ -73,7 +73,8 @@ vector<unsigned char> DHWrapper::keyToBytes(EVP_PKEY* key, bool isPublic) {
     BIO* bio = BIO_new(BIO_s_mem());
     if (isPublic) {
         PEM_write_bio_PUBKEY(bio, key);
-    } else {
+    } 
+    else {
         PEM_write_bio_PrivateKey(bio, key, nullptr, nullptr, 0, nullptr, nullptr);
     }
 
@@ -93,7 +94,8 @@ EVP_PKEY* DHWrapper::bytesToKey(const vector<unsigned char>& keyBytes, bool isPu
 
     if (isPublic) {
         key = PEM_read_bio_PUBKEY(bio, nullptr, nullptr, nullptr);
-    } else {
+    } 
+    else {
         key = PEM_read_bio_PrivateKey(bio, nullptr, nullptr, nullptr);
     }
 
@@ -119,12 +121,14 @@ EVP_PKEY* DHWrapper::generateDHKeyPair(int keyLength) {
             EVP_PKEY_free(dh_params);
             throw runtime_error("Error setting 1024-bit DH parameters");
         }
-    } else if (keyLength == 2048) {
+    } 
+    else if (keyLength == 2048) {
         if (!EVP_PKEY_set1_DH(dh_params, DH_get_2048_224())) {
             EVP_PKEY_free(dh_params);
             throw runtime_error("Error setting 2048-bit DH parameters");
         }
-    } else {
+    } 
+    else {
         EVP_PKEY_free(dh_params);
         throw invalid_argument("Unsupported key length. Use 1024 or 2048.");
     }
@@ -162,8 +166,8 @@ vector<unsigned char> DHWrapper::clientKeyExchange(int socket, int sessionKeyLen
         throw invalid_argument("Session key length must be at most 32 bytes.");
     }
 
-    // Generate a random 16 byte ephemeral key, used for just for authentication purposes
-    vector<unsigned char> authKey =  generateRandomBytes(16);
+    // Generate a random 16 bytes ephemeral key, used just for authentication purposes
+    vector<unsigned char> authKey = generateRandomBytes(16);
 
     // Encrypt the authentication key with the server's public key
     RSAWrapper rsaWrapper("Client/Storage/Keys/server_pubkey.pem", "");

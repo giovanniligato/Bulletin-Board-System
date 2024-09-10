@@ -1,5 +1,5 @@
-#ifndef AESGCMWRAPPER_H
-#define AESGCMWRAPPER_H
+#ifndef AESGCM_WRAPPER_H
+#define AESGCM_WRAPPER_H
 
 #include <string>
 #include <vector>
@@ -34,4 +34,4 @@ private:
     static constexpr int TAG_SIZE = 16; // Recommended size for GCM Tag
 };
 
-#endif // AESGCMWRAPPER_H
+#endif // AESGCM_WRAPPER_H

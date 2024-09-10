@@ -31,7 +31,7 @@ public:
 private:
     const string basePath;
     int nextId;
-    mutex boardMutex;
+    mutex bulletinBoardMutex;
 
     // Helper to load messages from the file system
     vector<Message> loadMessages();

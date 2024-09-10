@@ -4,25 +4,22 @@
 #include <cstring>
 #include <unistd.h>
 #include <arpa/inet.h>
-#include <openssl/evp.h> // For cryptographic operations
-#include <openssl/rand.h> // For secure random number generation
 #include <signal.h>
 #include <mutex>
 
-#include "../Utility/Cryptography/Randomness.h"
-#include "../Utility/Cryptography/RSAWrapper.h"
-#include "../Utility/Cryptography/AESGCMWrapper.h"
-#include "../Utility/Cryptography/DHWrapper.h"
-#include "../Utility/Cryptography/Hash.h"
+#include "../Utility/Randomness.h"
+#include "../Utility/RSAWrapper.h"
+#include "../Utility/AESGCMWrapper.h"
+#include "../Utility/DHWrapper.h"
+#include "../Utility/Hash.h"
 #include "../Packets/GeneralPacket.h"
 #include "../FileSystem/User.h"
 #include "../FileSystem/BulletinBoard.h"
 
-
 using namespace std;
 
 #define DEFAULT_PORT 3030
-#define MAX_CLIENTS 10
+#define MAX_CLIENTS 5
 
 class Server {
 public:
@@ -33,34 +30,34 @@ public:
 private:
     int server_socket;
     struct sockaddr_in address;
+
+    // Vector to store client threads
     vector<thread> client_threads;
 
     static volatile bool server_running; 
 
+    // Bulletin Board instance to manage messages
     static BulletinBoard bulletinBoard;
 
-    static void clientHandler(int client_socket);
     static void signalHandler(int signal);
-    static vector<unsigned char> performKeyExchange(int client_socket);
+    static void clientHandler(int client_socket);
+    static vector<unsigned char> secureConnection(int client_socket);
     static void processClientRequests(int client_socket);
     
     static void registerUser(int client_socket, const vector<unsigned char>& sessionKey, GeneralPacket receivedPacket);
     static void loginUser(int client_socket, const vector<unsigned char>& tempKey, vector<unsigned char>& sessionKey, GeneralPacket receivedPacket);
 
-    static void listMessages(int client_socket, const vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket);
-    static void getMessage(int client_socket, const vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket);
-    static void addMessage(int& client_socket, const vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket);
+    static void listMessages(int client_socket, const vector<unsigned char>& sessionKey, GeneralPacket receivedPacket);
+    static void getMessage(int client_socket, const vector<unsigned char>& sessionKey, GeneralPacket receivedPacket);
+    static void addMessage(int& client_socket, const vector<unsigned char>& sessionKey, GeneralPacket receivedPacket);
 
-
-    // Helper functions for encryption and decryption
-    static string decryptMessage(const vector<unsigned char>& ciphertext, const vector<unsigned char>& sessionKey);
-    static vector<unsigned char> encryptMessage(const string& plaintext, const vector<unsigned char>& sessionKey);
 };
 
 volatile bool Server::server_running = true;
 BulletinBoard Server::bulletinBoard("Server/Storage/BulletinBoard");
 
 Server::Server(int port) {
+    // opt is used to set socket options
     int opt = 1;
 
     // Register signal handler for SIGINT (Ctrl+C)
@@ -126,7 +123,7 @@ void Server::start() {
             continue;
         }
 
-        cout << "New connection accepted." << endl;
+        cout << "New client connected. Spawning a new thread to handle the client." << endl;
 
         // Create a new thread to handle the client
         client_threads.push_back(thread(Server::clientHandler, client_socket));
@@ -138,19 +135,21 @@ void Server::start() {
             th.join();
         }
     }
+
 }
 
 void Server::clientHandler(int client_socket) {
     
-    // Process client requests
+    // Main function that handles the client requests
     processClientRequests(client_socket);
 
     // Close the client socket after the session ends
     close(client_socket);
     cout << "Client disconnected." << endl;
+    
 }
 
-vector<unsigned char> Server::performKeyExchange(int client_socket) {
+vector<unsigned char> Server::secureConnection(int client_socket) {
 
     vector<unsigned char> key;
 
@@ -167,7 +166,7 @@ vector<unsigned char> Server::performKeyExchange(int client_socket) {
         if (strcmp(ex.what(), "Connection closed by peer") == 0) {
             throw;
         }
-        cerr << "Error in performKeyExchange(): " << ex.what() << endl;
+        cerr << "Error in secureConnection(): " << ex.what() << endl;
     }
 
     return key;
@@ -182,7 +181,7 @@ void Server::processClientRequests(int client_socket) {
         while(client_socket > 0){
             
             vector<unsigned char> tempKey = sessionKey.empty()
-                                            ? performKeyExchange(client_socket)
+                                            ? secureConnection(client_socket)
                                             : sessionKey;
 
             GeneralPacket receivedPacket = GeneralPacket::receive(client_socket, tempKey);
@@ -216,7 +215,6 @@ void Server::processClientRequests(int client_socket) {
                         client_socket = -1;
                         break;
                     }
-                    cout << "Received LIST request." << endl;
                     listMessages(client_socket, sessionKey, receivedPacket);
                     break;
                 case T_GET:
@@ -227,7 +225,6 @@ void Server::processClientRequests(int client_socket) {
                         client_socket = -1;
                         break;
                     }
-                    cout << "Received GET request." << endl;
                     getMessage(client_socket, sessionKey, receivedPacket);
                     break;
                 case T_ADD:
@@ -238,7 +235,6 @@ void Server::processClientRequests(int client_socket) {
                         client_socket = -1;
                         break;
                     }
-                    cout << "Received ADD request." << endl;
                     addMessage(client_socket, sessionKey, receivedPacket);
                     break;
                 case T_LOGOUT:
@@ -279,7 +275,9 @@ void Server::registerUser(int client_socket, const vector<unsigned char>& sessio
         vector<unsigned char> payload = receivedPacket.getPayload();
 
         // Extract the email, nickname, and password from the payload
-        // 1 Byte for the email length, email, 1 Byte for the nickname length, nickname, 1 Byte for the password length, password
+        // 1 Byte for the email length, email, 
+        // 1 Byte for the nickname length, nickname, 
+        // 1 Byte for the password length, password
         uint8_t email_length = payload[0];
         string email(payload.begin() + 1, payload.begin() + 1 + email_length);
 
@@ -289,22 +287,20 @@ void Server::registerUser(int client_socket, const vector<unsigned char>& sessio
         uint8_t password_length = payload[1 + email_length + 1 + nickname_length];
         string password(payload.begin() + 1 + email_length + 1 + nickname_length + 1, payload.begin() + 1 + email_length + 1 + nickname_length + 1 + password_length);
 
-        cout << "Received registration request:" << endl;
-        cout << "Email: " << email << endl;
-        cout << "nickname: " << nickname << endl;
-        cout << "Password: " << password << endl;
-
-        
         User newUser(email, nickname, password);
-        // At this point, the server has to check if the nickname is already in use
-        // If the nickname is not in use, the server can register the user
+        // At this point, the server has to check 
+        // if the nickname is already in use. If 
+        // the nickname is not in use, the server
+        // can proceed with the registration process.
 
         payload.clear();
 
         if(!newUser.checkExistence()){
-            // The user does not exist, so we can register the user
-            // but before that, the server has to send a challenge
-            // to the email address specified by the user
+            // The user does not exist, so the server
+            // can register the user but before that, 
+            // the server has to send a challenge to 
+            // the email address specified by the user.
+            cout << "Sending challenge to: " << email << endl;
             vector<unsigned char> challenge = newUser.sendChallenge();
 
             // Sending the response to the client
@@ -326,7 +322,7 @@ void Server::registerUser(int client_socket, const vector<unsigned char>& sessio
                 return;
             }
 
-            // User has successfully responded to the challenge
+            // User has successfully answered to the challenge
             // Now we can register the user
             newUser.saveUser();
 
@@ -352,9 +348,6 @@ void Server::registerUser(int client_socket, const vector<unsigned char>& sessio
         cerr << "Error in registerUser(): " << ex.what() << endl;
     }
     
-    // TO DO: Implement user registration logic
-    // For now, just echo the received packet back to the client
-    // receivedPacket.send(client_socket);
 }
 
 void Server::loginUser(int client_socket, const vector<unsigned char>& tempKey, vector<unsigned char>& sessionKey, GeneralPacket receivedPacket) {
@@ -365,16 +358,13 @@ void Server::loginUser(int client_socket, const vector<unsigned char>& tempKey, 
         vector<unsigned char> payload = receivedPacket.getPayload();
 
         // Extract the nickname and password from the payload
-        // 1 Byte for the nickname length, nickname, 1 Byte for the password length, password
+        // 1 Byte for the nickname length, nickname, 
+        // 1 Byte for the password length, password
         uint8_t nickname_length = payload[0];
         string nickname(payload.begin() + 1, payload.begin() + 1 + nickname_length);
 
         uint8_t password_length = payload[1 + nickname_length];
         string password(payload.begin() + 1 + nickname_length + 1, payload.begin() + 1 + nickname_length + 1 + password_length);
-
-        cout << "Received login request:" << endl;
-        cout << "nickname: " << nickname << endl;
-        cout << "Password: " << password << endl;
 
         User user(nickname, password);
 
@@ -403,12 +393,9 @@ void Server::loginUser(int client_socket, const vector<unsigned char>& tempKey, 
         cerr << "Error in loginUser(): " << ex.what() << endl;
     }
 
-    // TO DO: Implement user login logic
-    // For now, just echo the received packet back to the client
-    // receivedPacket.send(client_socket);
 }
 
-void Server::listMessages(int client_socket, const vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket) {
+void Server::listMessages(int client_socket, const vector<unsigned char>& sessionKey, GeneralPacket receivedPacket) {
     
     try{
 
@@ -418,7 +405,7 @@ void Server::listMessages(int client_socket, const vector<unsigned char>& postLo
         // Extract the number of messages to list from the payload (uint32_t)
         uint32_t numMessages = (payload[0] << 24) | (payload[1] << 16) | (payload[2] << 8) | payload[3];
 
-        cout << "Received list request for " << numMessages << " messages." << endl;
+        cout << "Received LIST request for " << numMessages << " messages." << endl;
 
         payload.clear();
         GeneralPacket responsePacket(nonce, T_OK, payload);
@@ -429,9 +416,9 @@ void Server::listMessages(int client_socket, const vector<unsigned char>& postLo
             messages = bulletinBoard.list(numMessages);
         }
         catch(const exception& ex){
-            cerr << "Error in listMessages(): " << ex.what() << endl;
+            cerr << "Error in bulletinBoard.list(): " << ex.what() << endl;
             responsePacket.setType(T_KO);
-            responsePacket.send(client_socket, postLoginSessionKey);
+            responsePacket.send(client_socket, sessionKey);
             return;
         }
 
@@ -442,7 +429,7 @@ void Server::listMessages(int client_socket, const vector<unsigned char>& postLo
         // then for each message: 
         // 4 Bytes for the message ID, 
         // 2 Bytes for the title length, title, 
-        // 2 Bytes for the author length, author, 
+        // 1 Byte for the author length, author, 
         // 2 Bytes for the body length, body
         payload.push_back((messages.size() >> 24) & 0xFF);
         payload.push_back((messages.size() >> 16) & 0xFF);
@@ -460,9 +447,8 @@ void Server::listMessages(int client_socket, const vector<unsigned char>& postLo
             payload.push_back(title_length & 0xFF);
             payload.insert(payload.end(), msg.title.begin(), msg.title.end());
 
-            uint16_t author_length = msg.author.size();
-            payload.push_back((author_length >> 8) & 0xFF);
-            payload.push_back(author_length & 0xFF);
+            uint8_t author_length = msg.author.size();
+            payload.push_back(author_length);
             payload.insert(payload.end(), msg.author.begin(), msg.author.end());
 
             uint16_t body_length = msg.body.size();
@@ -474,19 +460,16 @@ void Server::listMessages(int client_socket, const vector<unsigned char>& postLo
 
         // Send the response to the client
         responsePacket.setPayload(payload);
-        responsePacket.send(client_socket, postLoginSessionKey);
+        responsePacket.send(client_socket, sessionKey);
 
     }
     catch(const exception& ex){
         cerr << "Error in listMessages(): " << ex.what() << endl;
     }
 
-    // TO DO: Implement list messages logic
-    // For now, just echo the received packet back to the client
-    // receivedPacket.send(client_socket);
 }
 
-void Server::getMessage(int client_socket, const vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket) {
+void Server::getMessage(int client_socket, const vector<unsigned char>& sessionKey, GeneralPacket receivedPacket) {
     
     try{
 
@@ -509,14 +492,14 @@ void Server::getMessage(int client_socket, const vector<unsigned char>& postLogi
         catch(const exception& ex){
             cerr << "Error in bulletinBoard.get(): " << ex.what() << endl;
             responsePacket.setType(T_KO);
-            responsePacket.send(client_socket, postLoginSessionKey);
+            responsePacket.send(client_socket, sessionKey);
             return;
         }
 
         // Construct the payload to send back to the client
         // 4 Bytes for the message ID,
         // 2 Bytes for the title length, title,
-        // 2 Bytes for the author length, author,
+        // 1 Byte for the author length, author,
         // 2 Bytes for the body length, body
 
         payload.push_back((message.identifier >> 24) & 0xFF);
@@ -529,9 +512,8 @@ void Server::getMessage(int client_socket, const vector<unsigned char>& postLogi
         payload.push_back(title_length & 0xFF);
         payload.insert(payload.end(), message.title.begin(), message.title.end());
         
-        uint16_t author_length = message.author.size();
-        payload.push_back((author_length >> 8) & 0xFF);
-        payload.push_back(author_length & 0xFF);
+        uint8_t author_length = message.author.size();
+        payload.push_back(author_length);
         payload.insert(payload.end(), message.author.begin(), message.author.end());
 
         uint16_t body_length = message.body.size();
@@ -541,20 +523,16 @@ void Server::getMessage(int client_socket, const vector<unsigned char>& postLogi
 
         // Send the response to the client
         responsePacket.setPayload(payload);
-        responsePacket.send(client_socket, postLoginSessionKey);
+        responsePacket.send(client_socket, sessionKey);
 
     }
     catch(const exception& ex){
         cerr << "Error in getMessage(): " << ex.what() << endl;
     }
 
-    // TO DO: Implement get message logic
-    // For now, just echo the received packet back to the client
-    // receivedPacket.send(client_socket);
-
 }
 
-void Server::addMessage(int& client_socket, const vector<unsigned char>& postLoginSessionKey, GeneralPacket receivedPacket) {
+void Server::addMessage(int& client_socket, const vector<unsigned char>& sessionKey, GeneralPacket receivedPacket) {
     
     try{
         vector<unsigned char> clientNonce = receivedPacket.getAAD();
@@ -572,10 +550,10 @@ void Server::addMessage(int& client_socket, const vector<unsigned char>& postLog
         // Construct the response packet
         GeneralPacket responsePacket(aad, T_OK, payload);
         // Send securely to the client
-        responsePacket.send(client_socket, postLoginSessionKey);
+        responsePacket.send(client_socket, sessionKey);
 
         // Receive the message from the client
-        GeneralPacket messagePacket = GeneralPacket::receive(client_socket, postLoginSessionKey);
+        GeneralPacket messagePacket = GeneralPacket::receive(client_socket, sessionKey);
         // Check if the message is not a replay attack
         if(messagePacket.getAAD() != aad){
             cout << "Replay attack detected." << endl;
@@ -587,59 +565,39 @@ void Server::addMessage(int& client_socket, const vector<unsigned char>& postLog
 
         vector<unsigned char> messagePayload = messagePacket.getPayload();
         // Payload is the concatenation of the title, author, and body
-        // 2 Byte for the title length, title, 2 Byte for the author length, author, 2 Byte for the body length, body
+        // 2 Bytes for the title length, title, 
+        // 1 Byte for the author length, author, 
+        // 2 Bytes for the body length, body
 
         uint16_t title_length = (messagePayload[0] << 8) | messagePayload[1];
         string title(messagePayload.begin() + 2, messagePayload.begin() + 2 + title_length);
 
-        uint16_t author_length = (messagePayload[2 + title_length] << 8) | messagePayload[2 + title_length + 1];
-        string author(messagePayload.begin() + 2 + title_length + 2, messagePayload.begin() + 2 + title_length + 2 + author_length);
+        uint8_t author_length = messagePayload[2 + title_length];
+        string author(messagePayload.begin() + 2 + title_length + 1, messagePayload.begin() + 2 + title_length + 1 + author_length);
 
-        uint16_t body_length = (messagePayload[2 + title_length + 2 + author_length] << 8) | messagePayload[2 + title_length + 2 + author_length + 1];
-        string body(messagePayload.begin() + 2 + title_length + 2 + author_length + 2, messagePayload.begin() + 2 + title_length + 2 + author_length + 2 + body_length);
+        uint16_t body_length = (messagePayload[2 + title_length + 1 + author_length] << 8) | messagePayload[2 + title_length + 1 + author_length + 1];
+        string body(messagePayload.begin() + 2 + title_length + 1 + author_length + 2, messagePayload.begin() + 2 + title_length + 1 + author_length + 2 + body_length);
 
-        cout << "Received message:" << endl;
-        cout << "Title: " << title << endl;
-        cout << "Author: " << author << endl;
-        cout << "Body: " << body << endl;
-
+        cout << "Adding message." << endl;
 
         try{
-            cout<<"Adding message to the Bulletin Board..."<<endl;
             // Now we can save the message in the Bulletin Board
             bulletinBoard.add(title, author, body);
             cout << "Message added successfully." << endl;
         }
         catch(const exception& ex){
-            cerr << "Error in addMessage(): " << ex.what() << endl;
+            cerr << "Error in bulletinBoard.add(): " << ex.what() << endl;
             responsePacket.setType(T_KO);
         }
 
         // Send the response to the client
-        responsePacket.send(client_socket, postLoginSessionKey);
+        responsePacket.send(client_socket, sessionKey);
         
     }
     catch(const exception& ex){
         cerr << "Error in addMessage(): " << ex.what() << endl;
     }
 
-    // TO DO: Implement add message logic
-    // For now, just echo the received packet back to the client
-    // receivedPacket.send(client_socket);
-}
-
-
-
-string Server::decryptMessage(const vector<unsigned char>& ciphertext, const vector<unsigned char>& sessionKey) {
-    // TO DO: Implement decryption using sessionKey
-    // For now, just return the plaintext as a placeholder
-    return string(ciphertext.begin(), ciphertext.end());
-}
-
-vector<unsigned char> Server::encryptMessage(const string& plaintext, const vector<unsigned char>& sessionKey) {
-    // TO DO: Implement encryption using sessionKey
-    // For now, just return the plaintext as a vector of unsigned char as a placeholder
-    return vector<unsigned char>(plaintext.begin(), plaintext.end());
 }
 
 Server::~Server() {
@@ -647,6 +605,8 @@ Server::~Server() {
     cout << "Server shutdown completed." << endl;
 }
 
+
+// Main function
 int main(int argc, char *argv[]) {
     int port = DEFAULT_PORT;
 
@@ -654,8 +614,14 @@ int main(int argc, char *argv[]) {
         port = atoi(argv[1]);
     }
 
-    Server server(port);
-    server.start();
+    try {
+        Server server(port);
+        server.start();
+    }
+    catch(const exception& ex){
+        cerr << "Error in main(): " << ex.what() << endl;
+        return -1;
+    }
 
     return 0;
 }

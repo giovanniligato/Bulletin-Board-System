@@ -1,13 +1,12 @@
 #include "User.h"
 
-#include "../Utility/Cryptography/Randomness.h"
 
 const string User::accountsPath = "Server/Storage/Accounts";
 const string User::challengesPath = "Client/Storage/Emails";
 
 User::User(const string& email, const string& nickname, const string& password)
     : email(email), nickname(nickname), password(password) {
-    // Generate a random 16-byte salt
+    // Generate a random 16-bytes salt
     salt = generateRandomBytes(16);
 }
 
@@ -42,11 +41,11 @@ void User::saveUser() const {
     vector<unsigned char> salted_password(password.begin(), password.end());
     salted_password.insert(salted_password.end(), salt.begin(), salt.end());
 
-    vector<unsigned char> hashed_password = Hash::computeSHA256(salted_password);
+    vector<unsigned char> hashed_salted_password = Hash::computeSHA256(salted_password);
 
     ofstream passwordFile(userPath / "password.txt", ios::binary);
     if (passwordFile.is_open()) {
-        passwordFile.write(reinterpret_cast<const char*>(hashed_password.data()), hashed_password.size());
+        passwordFile.write(reinterpret_cast<const char*>(hashed_salted_password.data()), hashed_salted_password.size());
         passwordFile.close();
     } else {
         throw runtime_error("Failed to open file for writing password.");
@@ -70,13 +69,13 @@ bool User::checkPassword() const {
     infoFile.read(reinterpret_cast<char*>(storedSalt.data()), storedSalt.size());
     infoFile.close();
 
-    // Read the stored hashed password
+    // Read the stored hashed salted password
     ifstream passwordFile(userPath / "password.txt", ios::binary);
     if (!passwordFile.is_open()) {
         throw runtime_error("Failed to open password file.");
     }
 
-    vector<unsigned char> storedHashedPassword((istreambuf_iterator<char>(passwordFile)), istreambuf_iterator<char>());
+    vector<unsigned char> storedHashedSaltedPassword((istreambuf_iterator<char>(passwordFile)), istreambuf_iterator<char>());
     passwordFile.close();
 
     // Concatenate the current password and the stored salt
@@ -84,20 +83,20 @@ bool User::checkPassword() const {
     salted_input_password.insert(salted_input_password.end(), storedSalt.begin(), storedSalt.end());
 
     // Compute the SHA-256 hash of the current password with the stored salt
-    vector<unsigned char> inputHashedPassword = Hash::computeSHA256(salted_input_password);
+    vector<unsigned char> hashedSaltedInputPassword = Hash::computeSHA256(salted_input_password);
 
-    // Compare the hashed input password with the stored hashed password
-    return inputHashedPassword == storedHashedPassword;
+    // Compare the hashed salted input password with the stored hashed salted password
+    return hashedSaltedInputPassword == storedHashedSaltedPassword;
 }
 
 vector<unsigned char> User::sendChallenge() const {
 
-    // Generate a random 4-byte challenge
+    // Generate a random 4-bytes challenge
     vector<unsigned char> challenge = generateRandomBytes(4);
     uint32_t challengeValue = (static_cast<uint32_t>(challenge[0]) << 24) |  // Most significant byte
                               (static_cast<uint32_t>(challenge[1]) << 16) |
                               (static_cast<uint32_t>(challenge[2]) << 8)  |
-                              static_cast<uint32_t>(challenge[3]);         // Least significant byte
+                               static_cast<uint32_t>(challenge[3]);          // Least significant byte
 
     // Save the challengeValue to a file inside the 
     // client's storage simulating an email being sent

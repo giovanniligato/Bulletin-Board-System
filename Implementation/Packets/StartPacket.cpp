@@ -1,9 +1,7 @@
 #include "StartPacket.h"
 
-#include <stdexcept>
 #include <arpa/inet.h>
-
-#include "../Utility/Cryptography/AESGCMWrapper.h"
+#include "../Utility/AESGCMWrapper.h"
 
 
 // Constructor

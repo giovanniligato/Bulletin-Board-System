@@ -3,6 +3,7 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <algorithm>
 
 BulletinBoard::BulletinBoard(const string& basePath) : basePath(basePath), nextId(0) {
     if (!filesystem::exists(basePath)) {
@@ -22,7 +23,7 @@ vector<BulletinBoard::Message> BulletinBoard::loadMessages() {
     for (const auto& entry : filesystem::directory_iterator(basePath)) {
         if (entry.is_regular_file()) {
             string filename = entry.path().filename().string();
-            if (filename.find("message_") == 0) {  // Check if it's a message file
+            if (filename.find("message_") == 0) {  // Check if it's a message file (starts with "message_")
                 ifstream file(entry.path());
                 if (file.is_open()) {
                     Message msg;
@@ -52,14 +53,15 @@ void BulletinBoard::saveMessage(const Message& msg) {
         file << msg.author << '\n';
         file << msg.body << '\n';
         file.close();
-    } else {
+    } 
+    else {
         throw runtime_error("Failed to open file for saving message.");
     }
 }
 
 
 void BulletinBoard::add(const string& title, const string& author, const string& body) {
-    lock_guard<mutex> lock(boardMutex);
+    lock_guard<mutex> lock(bulletinBoardMutex);
 
     int id = nextId++;
     Message newMessage{id, title, author, body};
@@ -67,7 +69,7 @@ void BulletinBoard::add(const string& title, const string& author, const string&
 }
 
 BulletinBoard::Message BulletinBoard::get(int mid) {
-    lock_guard<mutex> lock(boardMutex);
+    lock_guard<mutex> lock(bulletinBoardMutex);
 
     string filePath = basePath + "/message_" + to_string(mid) + ".txt";
     if (filesystem::exists(filePath)) {
@@ -84,19 +86,26 @@ BulletinBoard::Message BulletinBoard::get(int mid) {
 
             file.close();
             return msg;
-        } else {
+        } 
+        else {
             throw runtime_error("Failed to open file for reading message.");
         }
-    } else {
+    } 
+    else {
         throw runtime_error("Message not found.");
     }
 }
 
 vector<BulletinBoard::Message> BulletinBoard::list(int n) {
-    lock_guard<mutex> lock(boardMutex);
+    lock_guard<mutex> lock(bulletinBoardMutex);
 
     vector<Message> allMessages = loadMessages();
     vector<Message> result;
+
+    // Sorting the messages by their identifier
+    sort(allMessages.begin(), allMessages.end(), [](const Message& a, const Message& b) {
+        return a.identifier < b.identifier;
+    });
 
     // Get the latest n messages
     int count = 0;

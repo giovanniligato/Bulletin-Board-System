@@ -1,5 +1,5 @@
-#ifndef RANDOMNESS
-#define RANDOMNESS
+#ifndef RANDOMNESS_H
+#define RANDOMNESS_H
 
 #include <openssl/rand.h>
 #include <vector>
@@ -7,8 +7,6 @@
 
 using namespace std;
 
-
 vector<unsigned char> generateRandomBytes(int length);
 
-
-#endif // RANDOMNESS
+#endif // RANDOMNESS_H

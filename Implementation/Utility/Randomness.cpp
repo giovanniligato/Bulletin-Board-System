@@ -1,4 +1,3 @@
-
 #include "Randomness.h"
 
 vector<unsigned char> generateRandomBytes(int length) {

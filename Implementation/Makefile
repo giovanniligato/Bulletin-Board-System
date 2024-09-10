@@ -10,7 +10,7 @@ LDFLAGS = -lssl -lcrypto -lpthread
 # Directories
 SERVER_DIR = Server
 CLIENT_DIR = Client
-UTILITY_CRYPTOGRAPHY_DIR = Utility/Cryptography
+UTILITY_CRYPTOGRAPHY_DIR = Utility
 PACKETS_DIR = Packets
 FILESYSTEM_DIR = FileSystem
 
