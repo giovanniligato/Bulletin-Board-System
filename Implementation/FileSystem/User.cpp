@@ -8,6 +8,14 @@ User::User(const string& email, const string& nickname, const string& password)
     : email(email), nickname(nickname), password(password) {
     // Generate a random 16-bytes salt
     salt = generateRandomBytes(16);
+
+    // Create accountsPath and challengesPath directories if they do not exist
+    if (!filesystem::exists(accountsPath)) {
+        filesystem::create_directory(accountsPath);
+    }
+    if (!filesystem::exists(challengesPath)) {
+        filesystem::create_directory(challengesPath);
+    }
 }
 
 User::User(const string& nickname, const string& password)

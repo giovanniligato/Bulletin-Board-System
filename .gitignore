@@ -1,5 +1,5 @@
 Implementation/clientBBS
 Implementation/serverBBS
 
-Server/Storage/Accounts/*
-Server/Storage/BulletinBoard/*
+Implementation/Server/Storage/Accounts
+Implementation/Server/Storage/BulletinBoard
