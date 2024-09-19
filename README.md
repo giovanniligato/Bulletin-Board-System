@@ -30,10 +30,15 @@ The project is organized into the following directories:
 - `Implementation/`: Contains the implementation of the BBS system in C++.
   
   - `Client/`: Client-side code responsible for interacting with the server.
+
     - `client.cpp`: Main source file for the client.
+
     - `Storage/`: Directory for storing client-side data.
+
       - `Emails/`: Placeholder for email storage.
+
       - `Keys/`: Stores the server's public key.
+
         - `server_pubkey.pem`: Public key of the server.
 
   - `Filesystem/`: Code related to the bulletin board and user operations.
@@ -49,11 +54,17 @@ The project is organized into the following directories:
     - `StartPacket.h`
 
   - `Server/`: Server-side code responsible for handling client requests and managing system data.
+
     - `server.cpp`: Main source file for the server logic.
+
     - `Storage/`: Directory for storing server-side data.
+
       - `Accounts/`: Placeholder for storing user account information.
+
       - `BulletinBoard/`: Directory for storing bulletin board messages.
+
       - `Keys/`: Stores server keys.
+
         - `server_privkey.pem`: Server's private key.
         - `server_pubkey.pem`: Server's public key.
 
