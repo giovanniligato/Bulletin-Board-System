@@ -283,27 +283,3 @@ The Bulletin Board System developed provides a secure and reliable platform for 
 
 By leveraging cryptographic protocols such as Diffie-Hellman key exchange, authenticated encryption, and structured communication packets, the system guarantees the privacy and integrity of communications while remaining adaptable to future requirements. Its robust, modular design ensures scalability and maintainability, allowing for easy enhancements in both functionality and security as needed.
 
-<!--
-Introduction
-
-Design 
-- Requirements
-- System Specification
-- Secure Channel
-
-Implementation
-- System architecture
-  - Server
-  - Client
-  - FileSystem
-  - Packets
-  - Utility
-
-- Client-Server Operations Flow
-  - General Packet Exchange
-  - Registration Example
-  - A particular operation (Add)
-
-Conclusion
-
--->
