@@ -41,7 +41,7 @@ The project is organized into the following directories:
 
         - `server_pubkey.pem`: Public key of the server.
 
-  - `Filesystem/`: Code related to the bulletin board and user operations.
+  - `Filesystem/`: Code related to the Bulletin Board and User operations.
     - `BulletinBoard.cpp`
     - `BulletinBoard.h`
     - `User.cpp`
@@ -59,9 +59,9 @@ The project is organized into the following directories:
 
     - `Storage/`: Directory for storing server-side data.
 
-      - `Accounts/`: Placeholder for storing user account information.
+      - `Accounts/`: Placeholder for storing User Account information.
 
-      - `BulletinBoard/`: Directory for storing bulletin board messages.
+      - `BulletinBoard/`: Directory for storing Bulletin Board messages.
 
       - `Keys/`: Stores server keys.
 
